@@ -5,6 +5,7 @@
 #
 # Authors:      Serge Dubrouski (sergeyfd@gmail.com) -- original RA
 #               Florian Haas (florian@linbit.com) -- makeover
+#               Takatoshi MATSUO (matsuo.tak@gmail.com) -- support replication
 #
 # Copyright:    2006-2010 Serge Dubrouski <sergeyfd@gmail.com>
 #                         and other Linux-HA contributors
@@ -66,6 +67,10 @@ OCF_RESKEY_stop_escalate_default=30
 OCF_RESKEY_monitor_user_default=""
 OCF_RESKEY_monitor_password_default=""
 OCF_RESKEY_monitor_sql_default="select now();"
+# Defaults for replication
+OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
+OCF_RESKEY_trigger_file_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.trigger"
+OCF_RESKEY_rep_mode_default=none
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -81,10 +86,14 @@ OCF_RESKEY_monitor_sql_default="select now();"
 : ${OCF_RESKEY_monitor_user=${OCF_RESKEY_monitor_user_default}}
 : ${OCF_RESKEY_monitor_password=${OCF_RESKEY_monitor_password_default}}
 : ${OCF_RESKEY_monitor_sql=${OCF_RESKEY_monitor_sql_default}}
+# for replication
+: ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
+: ${OCF_RESKEY_trigger_file=${OCF_RESKEY_trigger_file_default}}
+: ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
 
 usage() {
     cat <<EOF
-	usage: $0 start|stop|status|monitor|meta-data|validate-all|methods
+	usage: $0 start|stop|status|monitor|promote|demote|meta-data|validate-all|methods
 
 	$0 manages a PostgreSQL Server as an HA resource.
 
@@ -92,6 +101,8 @@ usage() {
         The 'stop' operation stops the PostgreSQL server.
         The 'status' operation reports whether the PostgreSQL is up.
         The 'monitor' operation reports whether the PostgreSQL is running.
+        The 'promote' operations promotes the PostgreSQL server.
+        The 'demote' operations demotes the PostgreSQL server.
         The 'validate-all' operation reports whether the parameters are valid.
         The 'methods' operation reports on the methods $0 supports.
 EOF
@@ -240,6 +251,34 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <shortdesc lang="en">stop escalation</shortdesc>
 <content type="integer" default="${OCF_RESKEY_stop_escalation}" />
 </parameter>
+
+<parameter name="rep_mode" unique="0" required="0">
+<longdesc lang="en">
+Replication mode(none/async).
+"aync" requires PostgreSQL 9.0 or later.
+</longdesc>
+<shortdesc lang="en">rep_mode</shortdesc>
+<content type="string" default="${OCF_RESKEY_rep_mode_default}" />
+</parameter>
+
+<parameter name="trigger_file" unique="0" required="0">
+<longdesc lang="en">
+Path to PostgreSQL trigger_file.
+You must set this for the same parameter as recovery.conf of PostgreSQL.
+Used for streaming replication only.
+</longdesc>
+<shortdesc lang="en">trigger_file</shortdesc>
+<content type="string" default="${OCF_RESKEY_trigger_file_default}" />
+</parameter>
+
+<parameter name="tmpdir" unique="0" required="0">
+<longdesc lang="en">
+Path to temporary directory.
+Used for streaming replication only.
+</longdesc>
+<shortdesc lang="en">tmpdir</shortdesc>
+<content type="string" default="${OCF_RESKEY_tmpdir_default}" />
+</parameter>
 </parameters>
 
 <actions>
@@ -247,6 +286,9 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <action name="stop" timeout="120" />
 <action name="status" timeout="60" />
 <action name="monitor" depth="0" timeout="30" interval="30"/>
+<action name="monitor" depth="0" timeout="30" interval="29" role="Master" />
+<action name="promote" timeout="120" />
+<action name="demote" timeout="120" />
 <action name="meta-data" timeout="5" />
 <action name="validate-all" timeout="5" />
 <action name="methods" timeout="5" />
@@ -299,6 +341,8 @@ pgsql_methods() {
 	stop
 	status
 	monitor
+	promote
+	demote
 	methods
 	meta-data
 	validate-all
@@ -307,7 +351,7 @@ EOF
 
 
 #pgsql_start: Starts PostgreSQL
-pgsql_start() {
+pgsql_real_start() {
     local pgctl_options
     local postgres_options
 
@@ -371,21 +415,179 @@ pgsql_start() {
 
     while :
     do
-        pgsql_monitor warn
+        pgsql_real_monitor warn
         rc=$?
-        if [ $rc -eq 0 ]; then
+        if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
             break;
         fi
         sleep 1
 	ocf_log debug "PostgreSQL still hasn't started yet. Waiting..."
     done
     ocf_log info "PostgreSQL is started."
+    return $rc
+}
+
+#pgsql_start:
+pgsql_start() {
+    if ! is_replication; then
+        pgsql_real_start
+        return $?
+    fi
+
+    if ! rm -f "$REPRESS_MONITOR"; then
+        ocf_log err "Can't remove $REPRESS_MONITOR."
+        return $OCF_ERR_GENERIC
+    fi
+
+    if ! rm -f "$OCF_RESKEY_trigger_file"; then
+        ocf_log err "Can't remove $OCF_RESKEY_trigger_file."
+        return $OCF_ERR_GENERIC
+    fi
+
+    if [ -f "$REPRESS_START" ]; then
+        ocf_log err "Repressing start file exists."
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:repressing start file exists"
+        return $OCF_ERR_GENERIC
+    fi
+
+    if pgsql_status; then
+        ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN:already started"
+        pgsql_real_monitor
+        return $?
+    fi
+
+    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    if [ ! -f "$RECOVERY_CONF" ]; then
+        ocf_log info "recovery.conf doesn't exist, so start PostgreSQL as a primary."
+
+        ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
+        if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+            ocf_log err "Master already exists. HOST=$OCF_RESKEY_CRM_meta_notify_master_uname"
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:master already exists"
+            return $OCF_ERR_GENERIC
+        fi
+
+        if ! touch "$REPRESS_MONITOR"; then
+            ocf_log err "Can't create $REPRESS_MONITOR."
+            return $OCF_ERR_GENERIC
+        fi
+        ocf_log info "Monitor operation was repressed. Waiting for promote ... "
+
+        $CRM_MASTER -v $PROMOTE_ME
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:waiting for promote op"
+    else
+        ocf_log info "recovery.conf exists, so start PostgreSQL as a hot standby."
+
+        ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
+        if [ x = x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+            ocf_log err "Master doesn't exit."
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:master doesn't exist"
+            return $OCF_ERR_GENERIC
+        fi
+
+        if ! touch "$REPRESS_START"; then
+            ocf_log err "Can't create $REPRESS_START."
+            return $OCF_ERR_GENERIC
+        fi
+        ocf_log info "start op:$REPRESS_START was created"
+
+        pgsql_real_start
+        if [ $? -ne $OCF_SUCCESS ]; then
+            ocf_log err "PostgreSQL has not started as a hot standby."
+            return $OCF_ERR_GENERIC
+        fi
+
+        $CRM_MASTER -v $CAN_PROMOTE
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "HS"
+    fi
 
     return $OCF_SUCCESS
 }
 
+#
+# promote operation
+#
+pgsql_promote() {
+    if ! is_replication; then
+        return $OCF_ERR_CONFIGURED
+    fi
+
+    if ! pgsql_status; then
+        if [ -f "$REPRESS_START" ]; then
+            ocf_log err "Repressing start file exists."
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:repressing start file exists"
+            return $OCF_ERR_GENERIC
+        fi
+
+        if ! touch "$REPRESS_START"; then
+            ocf_log err "Can't create $REPRESS_START."
+            return $OCF_ERR_GENERIC
+        fi
+        ocf_log info "promote op:$REPRESS_START was created."
+
+        pgsql_real_start
+        if [ $? -ne $OCF_RUNNING_MASTER ]; then
+            ocf_log err "PostgreSQL has not started as a primary."
+            return $OCF_ERR_GENERIC
+        fi
+
+        if ! rm -f "$REPRESS_MONITOR"; then
+            ocf_log err "Can't remove $REPRESS_MONITOR."
+            return $OCF_ERR_GENERIC
+        fi
+        ocf_log info "Monitor operation was resumed."
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+    else
+        if ! touch "$OCF_RESKEY_trigger_file"; then
+            ocf_log err "Can't create $OCF_RESKEY_trigger_file."
+            return $OCF_ERR_GENERIC
+        fi
+        ocf_log info "$OCF_RESKEY_trigger_file was created."
+
+        while :
+        do
+            pgsql_real_monitor warn
+            rc=$?
+            if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+                break;
+            fi
+            sleep 1
+            ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
+        done
+        ocf_log info "PostgreSQL is promoted to a primary."
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+
+        $CRM_MASTER -v $PROMOTE_ME
+    fi
+
+    return $OCF_SUCCESS
+}
+
+#
+# demote operation
+#
+pgsql_demote() {
+    $CRM_MASTER -v $CAN_NOT_PROMOTE
+
+    if ! pgsql_status
+    then
+        ocf_log info "PostgreSQL is already stopped."
+        return $OCF_SUCCESS
+    fi
+
+    pgsql_real_stop
+    rc=$?
+    if [ $rc -ne $OCF_SUCCESS ]; then
+        return $rc
+    fi
+
+    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    return $OCF_SUCCESS
+}
+
 #pgsql_stop: Stop PostgreSQL
-pgsql_stop() {
+pgsql_real_stop() {
     if ! pgsql_status
     then
         #Already stopped
@@ -417,7 +619,7 @@ pgsql_stop() {
 
     while :
     do
-        pgsql_monitor
+        pgsql_real_monitor
         rc=$?
         if [ $rc -eq $OCF_NOT_RUNNING ]; then
             # An unnecessary debug log is prevented.
@@ -432,6 +634,34 @@ pgsql_stop() {
 
     return $OCF_SUCCESS
 }
+
+
+#pgsql_stop
+pgsql_stop() {
+    if ! is_replication; then
+        pgsql_real_stop
+        return $?
+    fi
+
+    $CRM_MASTER -v $CAN_NOT_PROMOTE
+
+    if ! pgsql_status
+    then
+        ocf_log info "PostgreSQL is already stopped."
+        return $OCF_SUCCESS
+    fi
+
+    pgsql_real_stop
+    rc=$?
+    if [ $rc -ne $OCF_SUCCESS ]; then
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN"
+        return $rc
+    fi
+
+    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    return $OCF_SUCCESS
+}
+
 
 #
 # pgsql_status: is PostgreSQL up?
@@ -453,9 +683,10 @@ pgsql_status() {
 # pgsql_monitor
 #
 
-pgsql_monitor() {
+pgsql_real_monitor() {
     local loglevel
     local psql_options
+    local output
 
     # Set the log level of the error message
     loglevel=${1:-err}
@@ -498,7 +729,82 @@ pgsql_monitor() {
 	return $OCF_ERR_GENERIC
     fi
 
+    if is_replication; then
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc '$CHECK_MS_SQL'" 2>&1`
+        rc=$?
+        case "$output" in
+            f)  ocf_log debug "PostgreSQL is running as a primary."
+                return $OCF_RUNNING_MASTER;;
+
+            t)  ocf_log debug "PostgreSQL is running as a hot standby."
+                return $OCF_SUCCESS;;
+
+            *)  ocf_log err "Fatal error in '$CHECK_MS_SQL': $output"
+                return $OCF_ERR_GENERIC;;
+        esac
+    fi
+
     return $OCF_SUCCESS
+}
+
+pgsql_monitor() {
+    if ! is_replication; then
+        pgsql_real_monitor
+        return $?
+    fi
+
+    if ! ocf_is_probe; then
+        if [ -f $REPRESS_MONITOR ]; then
+            ocf_log info "Waiting for promote ... "
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:waiting for promote op"
+            return $OCF_SUCCESS
+        fi
+    fi
+
+    pgsql_real_monitor
+    rc=$?
+    if ocf_is_probe; then
+        if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
+            ocf_log warn "probe: PostgreSQL has started before the resource agent starts. PID=`cat $PIDFILE`"
+
+            if ! rm -f $REPRESS_MONITOR; then
+                ocf_log err "Can't remove $REPRESS_MONITOR."
+                return $OCF_ERR_GENERIC
+            fi
+
+            if ! rm -f $OCF_RESKEY_trigger_file; then
+                ocf_log err "Can't remove $OCF_RESKEY_trigger_file."
+                return $OCF_ERR_GENERIC
+            fi
+
+            if ! touch $REPRESS_START; then
+                ocf_log err "Can't create $REPRESS_START."
+                return $OCF_ERR_GENERIC
+            fi
+            ocf_log info "probe:$REPRESS_START was created."
+
+            if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+                ocf_log info "probe: PostgreSQL is running as a primary."
+                $CRM_MASTER -v $PROMOTE_ME
+                $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+            else
+                ocf_log info "probe: PostgreSQL is running as a hot standby."
+                $CRM_MASTER -v $CAN_PROMOTE
+                $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "HS"
+            fi
+        fi
+    fi
+
+    if ! ocf_is_probe; then
+        if [ $rc -eq $OCF_NOT_RUNNING ]; then
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:with errors"
+        fi
+        if [ $rc -eq $OCF_ERR_GENERIC ]; then
+            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN:with errors"
+        fi
+    fi
+
+    return $rc
 }
 
 check_binary2() {
@@ -542,6 +848,19 @@ pgsql_validate_all() {
     then
         ocf_log err "monitor_user has to be set if monitor_password is set"
         return $OCF_ERR_CONFIGURED
+    fi
+
+    if is_replication; then
+        if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
+            ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
+            return $OCF_ERR_CONFIGURED
+        fi
+
+        dir=`dirname $OCF_RESKEY_trigger_file`
+        if ! runasowner "test -r $dir -a -w $dir"; then
+            ocf_log err "$OCF_RESKEY_pgdba can't create or remove $OCF_RESKEY_trigger_file"
+            return $OCF_ERR_CONFIGURED
+        fi
     fi
 
     return $OCF_SUCCESS
@@ -598,6 +917,13 @@ check_socket_dir() {
     fi
 }
 
+is_replication() {
+    if [ "$OCF_RESKEY_rep_mode" != "none" ]; then
+        return 0
+    fi
+    return 1
+}
+
 #
 #   'main' starts here...
 #
@@ -612,6 +938,16 @@ fi
 
 PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
+RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
+REPRESS_MONITOR=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_monitor
+REPRESS_START=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_start
+CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
+CAN_NOT_PROMOTE="-INFINITY"
+CAN_PROMOTE="100"
+PROMOTE_ME="1000"
+CHECK_MS_SQL="select pg_is_in_recovery();"
+ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
+PGSQL_STATUS_NAME="pgsql-status"
 
 case "$1" in
     methods)    pgsql_methods
@@ -662,6 +998,12 @@ case "$1" in
                 exit $?;;
 
     start)      pgsql_start
+                exit $?;;
+
+    promote)    pgsql_promote
+                exit $?;;
+
+    demote)     pgsql_demote
                 exit $?;;
 
     stop)       pgsql_stop
