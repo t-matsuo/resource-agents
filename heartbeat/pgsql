@@ -71,6 +71,7 @@ OCF_RESKEY_monitor_sql_default="select now();"
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_trigger_file_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.trigger"
 OCF_RESKEY_rep_mode_default=none
+OCF_RESKEY_show_status_default=no
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -90,6 +91,7 @@ OCF_RESKEY_rep_mode_default=none
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_trigger_file=${OCF_RESKEY_trigger_file_default}}
 : ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
+: ${OCF_RESKEY_show_status=${OCF_RESKEY_show_status_default}}
 
 usage() {
     cat <<EOF
@@ -279,6 +281,14 @@ Used for streaming replication only.
 <shortdesc lang="en">tmpdir</shortdesc>
 <content type="string" default="${OCF_RESKEY_tmpdir_default}" />
 </parameter>
+
+<parameter name="show_status" unique="0" required="0">
+<longdesc lang="en">
+show replication status(yes/no)
+</longdesc>
+<shortdesc lang="en">show status</shortdesc>
+<content type="string" default="${OCF_RESKEY_show_status}" />
+</parameter>
 </parameters>
 
 <actions>
@@ -446,25 +456,25 @@ pgsql_start() {
 
     if [ -f "$REPRESS_START" ]; then
         ocf_log err "Repressing start file exists."
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:repressing start file exists"
+        show_status "STOP:repressing start file exists"
         return $OCF_ERR_GENERIC
     fi
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN:already started"
+        show_status "UNKNOWN:already started"
         pgsql_real_monitor
         return $?
     fi
 
-    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    show_status "STOP"
     if [ ! -f "$RECOVERY_CONF" ]; then
         ocf_log info "recovery.conf doesn't exist, so start PostgreSQL as a primary."
 
         ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
         if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
             ocf_log err "Master already exists. HOST=$OCF_RESKEY_CRM_meta_notify_master_uname"
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:master already exists"
+            show_status "STOP:master already exists"
             return $OCF_ERR_GENERIC
         fi
 
@@ -475,14 +485,14 @@ pgsql_start() {
         ocf_log info "Monitor operation was repressed. Waiting for promote ... "
 
         $CRM_MASTER -v $PROMOTE_ME
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:waiting for promote op"
+        show_status "STOP:waiting for promote op"
     else
         ocf_log info "recovery.conf exists, so start PostgreSQL as a hot standby."
 
         ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
         if [ x = x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
             ocf_log err "Master doesn't exit."
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:master doesn't exist"
+            show_status "STOP:master doesn't exist"
             return $OCF_ERR_GENERIC
         fi
 
@@ -499,7 +509,7 @@ pgsql_start() {
         fi
 
         $CRM_MASTER -v $CAN_PROMOTE
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "HS"
+        show_status "HS"
     fi
 
     return $OCF_SUCCESS
@@ -516,7 +526,7 @@ pgsql_promote() {
     if ! pgsql_status; then
         if [ -f "$REPRESS_START" ]; then
             ocf_log err "Repressing start file exists."
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:repressing start file exists"
+            show_status "STOP:repressing start file exists"
             return $OCF_ERR_GENERIC
         fi
 
@@ -537,7 +547,7 @@ pgsql_promote() {
             return $OCF_ERR_GENERIC
         fi
         ocf_log info "Monitor operation was resumed."
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+        show_status "PRI"
     else
         if ! touch "$OCF_RESKEY_trigger_file"; then
             ocf_log err "Can't create $OCF_RESKEY_trigger_file."
@@ -556,7 +566,7 @@ pgsql_promote() {
             ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
         done
         ocf_log info "PostgreSQL is promoted to a primary."
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+        show_status "PRI"
 
         $CRM_MASTER -v $PROMOTE_ME
     fi
@@ -582,7 +592,7 @@ pgsql_demote() {
         return $rc
     fi
 
-    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    show_status "STOP"
     return $OCF_SUCCESS
 }
 
@@ -654,11 +664,11 @@ pgsql_stop() {
     pgsql_real_stop
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN"
+        show_status "UNKNOWN"
         return $rc
     fi
 
-    $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP"
+    show_status "STOP"
     return $OCF_SUCCESS
 }
 
@@ -756,7 +766,7 @@ pgsql_monitor() {
     if ! ocf_is_probe; then
         if [ -f $REPRESS_MONITOR ]; then
             ocf_log info "Waiting for promote ... "
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:waiting for promote op"
+            show_status "STOP:waiting for promote op"
             return $OCF_SUCCESS
         fi
     fi
@@ -786,21 +796,21 @@ pgsql_monitor() {
             if [ $rc -eq $OCF_RUNNING_MASTER ]; then
                 ocf_log info "probe: PostgreSQL is running as a primary."
                 $CRM_MASTER -v $PROMOTE_ME
-                $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "PRI"
+                show_status "PRI"
             else
                 ocf_log info "probe: PostgreSQL is running as a hot standby."
                 $CRM_MASTER -v $CAN_PROMOTE
-                $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "HS"
+                show_status "HS"
             fi
         fi
     fi
 
     if ! ocf_is_probe; then
         if [ $rc -eq $OCF_NOT_RUNNING ]; then
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "STOP:with errors"
+            show_status "STOP:with errors"
         fi
         if [ $rc -eq $OCF_ERR_GENERIC ]; then
-            $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "UNKNOWN:with errors"
+            show_status "UNKNOWN:with errors"
         fi
     fi
 
@@ -922,6 +932,12 @@ is_replication() {
         return 0
     fi
     return 1
+}
+
+show_status() {
+    if [ "$OCF_RESKEY_show_status" = "yes" ]; then
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v $1
+    fi
 }
 
 #
