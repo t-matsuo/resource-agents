@@ -287,7 +287,7 @@ Used for streaming replication only.
 show replication status(yes/no)
 </longdesc>
 <shortdesc lang="en">show status</shortdesc>
-<content type="string" default="${OCF_RESKEY_show_status}" />
+<content type="string" default="${OCF_RESKEY_show_status_default}" />
 </parameter>
 </parameters>
 
