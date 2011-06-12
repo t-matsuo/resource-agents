@@ -69,9 +69,14 @@ OCF_RESKEY_monitor_password_default=""
 OCF_RESKEY_monitor_sql_default="select now();"
 # Defaults for replication
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
-OCF_RESKEY_trigger_file_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.trigger"
 OCF_RESKEY_rep_mode_default=none
 OCF_RESKEY_show_status_default=no
+OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
+OCF_RESKEY_startup_method_default=auto
+OCF_RESKEY_recovery_conf_default="${OCF_RESKEY_tmpdir_default}/recovery.conf"
+OCF_RESKEY_ip_list_default=""
+OCF_RESKEY_xlog_note_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.xlog_note"
+OCF_RESKEY_xlog_check_count_default="2"
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -89,13 +94,18 @@ OCF_RESKEY_show_status_default=no
 : ${OCF_RESKEY_monitor_sql=${OCF_RESKEY_monitor_sql_default}}
 # for replication
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
-: ${OCF_RESKEY_trigger_file=${OCF_RESKEY_trigger_file_default}}
 : ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
 : ${OCF_RESKEY_show_status=${OCF_RESKEY_show_status_default}}
+: ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
+: ${OCF_RESKEY_startup_method=${OCF_RESKEY_startup_method_default}}
+: ${OCF_RESKEY_recovery_conf=${OCF_RESKEY_recovery_conf_default}}
+: ${OCF_RESKEY_ip_list=${OCF_RESKEY_ip_list_default}}
+: ${OCF_RESKEY_xlog_note=${OCF_RESKEY_xlog_note_default}}
+: ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
 usage() {
     cat <<EOF
-	usage: $0 start|stop|status|monitor|promote|demote|meta-data|validate-all|methods
+	usage: $0 start|stop|status|monitor|promote|demote|notify|meta-data|validate-all|methods
 
 	$0 manages a PostgreSQL Server as an HA resource.
 
@@ -213,7 +223,6 @@ SQL script that will be used for monitor operations.
 <content type="string" default="${OCF_RESKEY_monitor_sql_default}" />
 </parameter>
 
-
 <parameter name="config" unique="0" required="0">
 <longdesc lang="en">
 Path to the PostgreSQL configuration file for the instance
@@ -257,20 +266,10 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <parameter name="rep_mode" unique="0" required="0">
 <longdesc lang="en">
 Replication mode(none/async).
-"aync" requires PostgreSQL 9.0 or later.
+"aync" requires PostgreSQL 9.1 or later.
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
 <content type="string" default="${OCF_RESKEY_rep_mode_default}" />
-</parameter>
-
-<parameter name="trigger_file" unique="0" required="0">
-<longdesc lang="en">
-Path to PostgreSQL trigger_file.
-You must set this for the same parameter as recovery.conf of PostgreSQL.
-Used for streaming replication only.
-</longdesc>
-<shortdesc lang="en">trigger_file</shortdesc>
-<content type="string" default="${OCF_RESKEY_trigger_file_default}" />
 </parameter>
 
 <parameter name="tmpdir" unique="0" required="0">
@@ -289,6 +288,68 @@ show replication status(yes/no)
 <shortdesc lang="en">show status</shortdesc>
 <content type="string" default="${OCF_RESKEY_show_status_default}" />
 </parameter>
+
+<parameter name="pgctldata" unique="0" required="0">
+<longdesc lang="en">
+Path to pg_controldata command.
+</longdesc>
+<shortdesc lang="en">pgctldata</shortdesc>
+<content type="string" default="${OCF_RESKEY_pgctldata_default}" />
+</parameter>
+
+<parameter name="startup_method" unique="0" required="0">
+<longdesc lang="en">
+Method to select master or slave.(auto/recovery)
+If you select "recovery", you have to put recovery.conf manually
+and start only master's pacemaker at the beginning.
+If you select "auto", I check pg_last_xlog_replay_location() and
+get timeline ID files from master.
+You have to set ip_list parameter to use "auto".
+Used for streaming replication only.
+</longdesc>
+<shortdesc lang="en">startup method</shortdesc>
+<content type="string" default="${OCF_RESKEY_startup_method_default}" />
+</parameter>
+
+<parameter name="recovery_conf" unique="0" required="0">
+<longdesc lang="en">
+Path to recovery.conf bakcup file.
+Used for startup_method="auto".
+</longdesc>
+<shortdesc lang="en">recovery.conf</shortdesc>
+<content type="string" default="${OCF_RESKEY_recovery_conf_method_default}" />
+</parameter>
+
+<parameter name="ip_list" unique="0" required="0">
+<longdesc lang="en">
+IP list used for checking xlog and get timeline ID files.
+You have to configure PostgreSQL for permit connection to this IP.
+Used for startup_method="auto".
+</longdesc>
+<shortdesc lang="en">ip list</shortdesc>
+<content type="string" default="${OCF_RESKEY_ip_list_default}" />
+</parameter>
+
+<parameter name="xlog_note" unique="0" required="0">
+<longdesc lang="en">
+Temporary file path used for checking xlog.
+Used for startup_method="auto".
+</longdesc>
+<shortdesc lang="en">xlog note</shortdesc>
+<content type="string" default="${OCF_RESKEY_xlog_note_default}" />
+</parameter>
+
+<parameter name="xlog_check_count" unique="0" required="0">
+<longdesc lang="en">
+I check xlog location to decide master on monitor operation.
+I wait to decide master this times on monitor
+after xlog location is not changed.
+Used for startup_method="auto".
+</longdesc>
+<shortdesc lang="en">xlog check count</shortdesc>
+<content type="string" default="${OCF_RESKEY_check_count_default}" />
+</parameter>
+
 </parameters>
 
 <actions>
@@ -299,6 +360,7 @@ show replication status(yes/no)
 <action name="monitor" depth="0" timeout="30" interval="29" role="Master" />
 <action name="promote" timeout="120" />
 <action name="demote" timeout="120" />
+<action name="notify"   timeout="90" />
 <action name="meta-data" timeout="5" />
 <action name="validate-all" timeout="5" />
 <action name="methods" timeout="5" />
@@ -353,6 +415,7 @@ pgsql_methods() {
 	monitor
 	promote
 	demote
+	notify
 	methods
 	meta-data
 	validate-all
@@ -449,8 +512,8 @@ pgsql_start() {
         return $OCF_ERR_GENERIC
     fi
 
-    if ! rm -f "$OCF_RESKEY_trigger_file"; then
-        ocf_log err "Can't remove $OCF_RESKEY_trigger_file."
+    if ! rm -f "${OCF_RESKEY_xlog_note}*"; then
+        ocf_log err "Can't remove $OCF_RESKEY_xlog_note.* files"
         return $OCF_ERR_GENERIC
     fi
 
@@ -468,48 +531,96 @@ pgsql_start() {
     fi
 
     show_status "STOP"
-    if [ ! -f "$RECOVERY_CONF" ]; then
-        ocf_log info "recovery.conf doesn't exist, so start PostgreSQL as a primary."
 
-        ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
-        if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
-            ocf_log err "Master already exists. HOST=$OCF_RESKEY_CRM_meta_notify_master_uname"
-            show_status "STOP:master already exists"
-            return $OCF_ERR_GENERIC
+    # Use recovery.conf
+    if [ "$OCF_RESKEY_startup_method" = "recovery" ]; then
+        ocf_log info "use recovery.conf to start"
+        if [ ! -f "$RECOVERY_CONF" ]; then
+            ocf_log info "recovery.conf doesn't exist, so start PostgreSQL as a primary."
+
+            ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
+            if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+                ocf_log err "Master already exists. HOST=$OCF_RESKEY_CRM_meta_notify_master_uname"
+                show_status "STOP:master already exists"
+                return $OCF_ERR_GENERIC
+            fi
+
+            if ! touch "$REPRESS_MONITOR"; then
+                ocf_log err "Can't create $REPRESS_MONITOR."
+                return $OCF_ERR_GENERIC
+            fi
+            ocf_log info "Monitor operation was repressed. Waiting for promote ... "
+
+            $CRM_MASTER -v $PROMOTE_ME
+            show_status "STOP:waiting for promote op"
+        else
+            ocf_log info "recovery.conf exists, so start PostgreSQL as a hot standby."
+
+            ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
+            if [ x = x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+                ocf_log err "Master doesn't exit."
+                show_status "STOP:master doesn't exist"
+                return $OCF_ERR_GENERIC
+            fi
+
+            if ! touch "$REPRESS_START"; then
+                ocf_log err "Can't create $REPRESS_START."
+                return $OCF_ERR_GENERIC
+            fi
+            ocf_log info "start op:$REPRESS_START was created"
+
+            pgsql_real_start
+            if [ $? -ne $OCF_SUCCESS ]; then
+                ocf_log err "PostgreSQL has not started as a hot standby."
+                return $OCF_ERR_GENERIC
+            fi
+
+            $CRM_MASTER -v $CAN_PROMOTE
+            show_status "HS"
         fi
+    # Use xlog on start
+    elif [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+        rm -f ${OCF_RESKEY_xlog_note}.*
+        cp $RECOVERY_CONF_BACK $RECOVERY_CONF
+        chown $OCF_RESKEY_pgdba $RECOVERY_CONF
 
-        if ! touch "$REPRESS_MONITOR"; then
-            ocf_log err "Can't create $REPRESS_MONITOR."
-            return $OCF_ERR_GENERIC
-        fi
-        ocf_log info "Monitor operation was repressed. Waiting for promote ... "
+        if [ ! -f "$RECOVERY_CONF" ]; then
+            ocf_log err "recovery.conf doesn't exist."
+            return $OCF_ERR_CONFIGURED
+	fi
 
-        $CRM_MASTER -v $PROMOTE_ME
-        show_status "STOP:waiting for promote op"
-    else
-        ocf_log info "recovery.conf exists, so start PostgreSQL as a hot standby."
-
-        ocf_log debug "OCF_RESKEY_CRM_meta_notify_master_uname: '$OCF_RESKEY_CRM_meta_notify_master_uname'"
-        if [ x = x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
-            ocf_log err "Master doesn't exit."
-            show_status "STOP:master doesn't exist"
-            return $OCF_ERR_GENERIC
-        fi
-
-        if ! touch "$REPRESS_START"; then
-            ocf_log err "Can't create $REPRESS_START."
-            return $OCF_ERR_GENERIC
-        fi
-        ocf_log info "start op:$REPRESS_START was created"
+        ocf_log info "auto start"
+        $CRM_MASTER -v $CAN_NOT_PROMOTE
 
         pgsql_real_start
         if [ $? -ne $OCF_SUCCESS ]; then
             ocf_log err "PostgreSQL has not started as a hot standby."
             return $OCF_ERR_GENERIC
         fi
+        show_status "HS:not connected"
 
-        $CRM_MASTER -v $CAN_PROMOTE
-        show_status "HS"
+        # If master is already exist, I will get timeline files and check connection to master.
+        if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+            ocf_log info "Master is exist on start op."
+            if ! get_timeline_file; then
+                return $OCF_ERR_GENERIC
+            fi
+
+            while :
+            do
+                if is_connect; then
+                    break
+                fi
+                ocf_log info "PostgreSQL still hasn't connected to primary yet. Waiting..."
+                sleep 1
+            done
+            $CRM_MASTER -v $CAN_PROMOTE
+            ocf_log info "PostgreSQL is connected to primary."
+            show_status "HS:connected"
+        fi
+    else
+        ocf_log err "startup_method \"$OCF_RESKEY_startup_method\" is invalid."
+        return $OCF_ERR_CONFIGURED
     fi
 
     return $OCF_SUCCESS
@@ -523,52 +634,47 @@ pgsql_promote() {
         return $OCF_ERR_CONFIGURED
     fi
 
-    if ! pgsql_status; then
-        if [ -f "$REPRESS_START" ]; then
-            ocf_log err "Repressing start file exists."
-            show_status "STOP:repressing start file exists"
-            return $OCF_ERR_GENERIC
-        fi
-
-        if ! touch "$REPRESS_START"; then
-            ocf_log err "Can't create $REPRESS_START."
-            return $OCF_ERR_GENERIC
-        fi
-        ocf_log info "promote op:$REPRESS_START was created."
-
-        pgsql_real_start
-        if [ $? -ne $OCF_RUNNING_MASTER ]; then
-            ocf_log err "PostgreSQL has not started as a primary."
-            return $OCF_ERR_GENERIC
-        fi
-
-        if ! rm -f "$REPRESS_MONITOR"; then
-            ocf_log err "Can't remove $REPRESS_MONITOR."
-            return $OCF_ERR_GENERIC
-        fi
-        ocf_log info "Monitor operation was resumed."
-        show_status "PRI"
-    else
-        if ! touch "$OCF_RESKEY_trigger_file"; then
-            ocf_log err "Can't create $OCF_RESKEY_trigger_file."
-            return $OCF_ERR_GENERIC
-        fi
-        ocf_log info "$OCF_RESKEY_trigger_file was created."
-
-        while :
-        do
-            pgsql_real_monitor warn
-            rc=$?
-            if [ $rc -eq $OCF_RUNNING_MASTER ]; then
-                break;
+    # Use recovery.conf
+    if [ "$OCF_RESKEY_startup_method" = "recovery" ]; then
+        if ! pgsql_status; then
+            if [ -f "$REPRESS_START" ]; then
+                ocf_log err "Repressing start file exists."
+                show_status "STOP:repressing start file exists"
+                return $OCF_ERR_GENERIC
             fi
-            sleep 1
-            ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
-        done
-        ocf_log info "PostgreSQL is promoted to a primary."
-        show_status "PRI"
 
+            if ! touch "$REPRESS_START"; then
+                ocf_log err "Can't create $REPRESS_START."
+                return $OCF_ERR_GENERIC
+            fi
+            ocf_log info "promote op:$REPRESS_START was created."
+
+            pgsql_real_start
+            if [ $? -ne $OCF_RUNNING_MASTER ]; then
+                ocf_log err "PostgreSQL has not started as a primary."
+                return $OCF_ERR_GENERIC
+            fi
+
+            if ! rm -f "$REPRESS_MONITOR"; then
+                ocf_log err "Can't remove $REPRESS_MONITOR."
+                return $OCF_ERR_GENERIC
+            fi
+            ocf_log info "Monitor operation was resumed."
+            show_status "PRI"
+        else
+            runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
+            wait_promoted
+            $CRM_MASTER -v $PROMOTE_ME
+        fi
+    # auto start
+    elif [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+        rm -f ${OCF_RESKEY_xlog_note}.*
+        runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
+        wait_promoted
         $CRM_MASTER -v $PROMOTE_ME
+    else
+        ocf_log err "startup_method \"$OCF_RESKEY_startup_method\" is invalid."
+        return $OCF_ERR_CONFIGURED
     fi
 
     return $OCF_SUCCESS
@@ -578,17 +684,21 @@ pgsql_promote() {
 # demote operation
 #
 pgsql_demote() {
+    local rc
     $CRM_MASTER -v $CAN_NOT_PROMOTE
 
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
+        show_status "STOP"
         return $OCF_SUCCESS
     fi
 
+    ocf_log info "stopping PostgreSQL on demote"
     pgsql_real_stop
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
+        show_status "UNKNOWN"
         return $rc
     fi
 
@@ -658,6 +768,7 @@ pgsql_stop() {
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
+        show_status "STOP"
         return $OCF_SUCCESS
     fi
 
@@ -758,64 +869,341 @@ pgsql_real_monitor() {
 }
 
 pgsql_monitor() {
+    local rc
+    local masters
+
     if ! is_replication; then
         pgsql_real_monitor
         return $?
     fi
 
-    if ! ocf_is_probe; then
-        if [ -f $REPRESS_MONITOR ]; then
-            ocf_log info "Waiting for promote ... "
-            show_status "STOP:waiting for promote op"
-            return $OCF_SUCCESS
+    if [ "$OCF_RESKEY_startup_method" = "recovery" ]; then
+        if ! ocf_is_probe; then
+            if [ -f $REPRESS_MONITOR ]; then
+                ocf_log info "Waiting for promote ... "
+                show_status "STOP:waiting for promote op"
+                return $OCF_SUCCESS
+            fi
         fi
-    fi
 
-    pgsql_real_monitor
-    rc=$?
-    if ocf_is_probe; then
-        if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
-            ocf_log warn "probe: PostgreSQL has started before the resource agent starts. PID=`cat $PIDFILE`"
+        pgsql_real_monitor
+        rc=$?
+        if ocf_is_probe; then
+            if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
+                ocf_log warn "probe: PostgreSQL has started before the resource agent starts. PID=`cat $PIDFILE`"
 
-            if ! rm -f $REPRESS_MONITOR; then
-                ocf_log err "Can't remove $REPRESS_MONITOR."
-                return $OCF_ERR_GENERIC
+                if ! rm -f $REPRESS_MONITOR; then
+                    ocf_log err "Can't remove $REPRESS_MONITOR."
+                    return $OCF_ERR_GENERIC
+                fi
+
+                if ! touch $REPRESS_START; then
+                    ocf_log err "Can't create $REPRESS_START."
+                    return $OCF_ERR_GENERIC
+                fi
+                ocf_log info "probe:$REPRESS_START was created."
+
+                if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+                    ocf_log info "probe: PostgreSQL is running as a primary."
+                    $CRM_MASTER -v $PROMOTE_ME
+                    show_status "PRI"
+                else
+                    ocf_log info "probe: PostgreSQL is running as a hot standby."
+                    $CRM_MASTER -v $CAN_PROMOTE
+                    show_status "HS"
+                fi
             fi
+        fi
 
-            if ! rm -f $OCF_RESKEY_trigger_file; then
-                ocf_log err "Can't remove $OCF_RESKEY_trigger_file."
-                return $OCF_ERR_GENERIC
+        if ! ocf_is_probe; then
+            if [ $rc -eq $OCF_NOT_RUNNING ]; then
+                show_status "STOP:with errors"
             fi
-
-            if ! touch $REPRESS_START; then
-                ocf_log err "Can't create $REPRESS_START."
-                return $OCF_ERR_GENERIC
+            if [ $rc -eq $OCF_ERR_GENERIC ]; then
+                show_status "UNKNOWN:with errors"
             fi
-            ocf_log info "probe:$REPRESS_START was created."
+        fi
+    # auto on monitor
+    elif [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+        pgsql_real_monitor
+        rc=$?
 
-            if [ $rc -eq $OCF_RUNNING_MASTER ]; then
-                ocf_log info "probe: PostgreSQL is running as a primary."
-                $CRM_MASTER -v $PROMOTE_ME
-                show_status "PRI"
-            else
-                ocf_log info "probe: PostgreSQL is running as a hot standby."
+        if [ "$rc" = "$OCF_RUNNING_MASTER" ] && ocf_is_probe; then
+            ocf_log warn "PostgreSQL is already running as a primary on probe"
+            $CRM_MASTER -v $CAN_PROMOTE
+            show_status "PRI"
+        fi
+
+        if [ "$rc" != $OCF_SUCCESS ]; then
+            return $rc
+        fi
+
+        # hmm... I can't get master name on monitor. It's bug ...
+        # if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+        masters=`crm_mon -1 | grep "Masters: \["`
+        if [ "x$masters" != "x" ]; then
+            if ocf_is_probe; then
+                ocf_log warn "PostgreSQL is already running as a hot standby on probe"
+                if ! is_connect; then
+                    ocf_log info "PostgreSQL still hasn't connected to primary yet."
+                    return $OCF_ERR_GENERIC
+                fi
                 $CRM_MASTER -v $CAN_PROMOTE
-                show_status "HS"
+                ocf_log info "PostgreSQL is connected to primary."
+                show_status "HS:connected"
+            fi
+            return $rc
+        # if master doesn't exist, we check xlog.
+        else
+            ocf_log info "master is not exist."
+            show_status "HS:not connected"
+            is_master_right
+            if [ "$?" = "0" ]; then
+                $CRM_MASTER -v $PROMOTE_ME
+                rm -f ${OCF_RESKEY_xlog_note}.$count
             fi
         fi
-    fi
-
-    if ! ocf_is_probe; then
-        if [ $rc -eq $OCF_NOT_RUNNING ]; then
-            show_status "STOP:with errors"
-        fi
-        if [ $rc -eq $OCF_ERR_GENERIC ]; then
-            show_status "UNKNOWN:with errors"
-        fi
+    else
+        ocf_log err "startup_method \"$OCF_RESKEY_startup_method\" is invalid."
+        return $OCF_ERR_CONFIGURED
     fi
 
     return $rc
 }
+
+wait_promoted() {
+    local rc
+    while :
+    do
+        pgsql_real_monitor warn
+        rc=$?
+        if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+            break;
+        fi
+        sleep 1
+        ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
+    done
+    ocf_log info "PostgreSQL is promoted."
+    show_status "PRI"
+    return 0
+}
+
+is_master_right() {
+    local rc
+    local old
+    local new
+    local output
+    local output1
+    local output2
+    local log1
+    local log2
+
+    ocf_log debug "checking right of master"
+
+    old=1
+    new=1
+    for count in `seq $OCF_RESKEY_xlog_check_count`; do
+       if [ -f ${OCF_RESKEY_xlog_note}.$count ]; then
+           old=$count
+           continue
+       fi
+       new=$count
+       break
+    done
+
+    for ip in $OCF_RESKEY_ip_list; do
+        if ! check_ping "$ip"; then
+            ocf_log info "$ip is not alive"
+            continue
+        fi
+
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "$CHECK_LAST_XLOG_SQL" 2>&1`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log info "psql error $ip rc=$rc"
+            continue
+        else
+            output1=`echo "$output" | cut -d "/" -f 1`
+                        output2=`echo "$output" | cut -d "/" -f 2`
+            log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
+            log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
+            ocf_log info "last xlog location : $ip $log1 $log2"
+            echo "$ip $log1 $log2" >> $OCF_RESKEY_xlog_note.$new
+        fi
+    done
+
+    if [ "$old" = "$new" ]; then
+        return 1
+    fi
+
+    if [ "$new" = "$OCF_RESKEY_xlog_check_count" ]; then
+       newestNode=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 1`
+       if is_myip "$newestNode"; then
+           ocf_log inf "I have master right."
+           return 0
+       fi
+       ocf_log info "I have no master right."
+    else
+        oldfile=`cat ${OCF_RESKEY_xlog_note}.$old`
+        newfile=`cat ${OCF_RESKEY_xlog_note}.$new`
+        if [ "$oldfile" != "$newfile" ]; then
+            mv -f ${OCF_RESKEY_xlog_note}.$new ${OCF_RESKEY_xlog_note}.1
+
+            # reset counter
+            for count in `seq 2 $OCF_RESKEY_xlog_check_count`; do
+            rm -f ${OCF_RESKEY_xlog_note}.$count
+            done
+        fi
+    fi
+    return 1
+}
+
+# for checking timeline.
+is_connect() {
+    local output
+    local connectOK=1
+
+    ocf_log debug "checking connection"
+    for ip in $OCF_RESKEY_ip_list; do
+        if is_myip "$ip"; then
+            continue
+        fi
+
+        if ! check_ping "$ip"; then
+            continue
+        fi
+
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_CLIENT_SQL" 2>&1`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log info "psql error $ip rc=$rc"
+            continue
+        else
+            if is_myip "$output"; then
+                ocf_log debug "connection OK"
+                connectOK=0
+                break
+            fi
+        fi
+    done
+
+    return $connectOK
+}
+
+pgsql_post_promote() {
+    local IS_CONNECT_TIMEOUT="10"
+
+    if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+        ocf_log info "post-promote called.(master is ${OCF_RESKEY_CRM_meta_notify_promote_uname})"
+        if [ "${OCF_RESKEY_CRM_meta_notify_promote_uname}" = "${HA_CURHOST} " ]; then
+            return $OCF_SUCCESS
+        fi
+
+        rm -f ${OCF_RESKEY_xlog_note}.$count
+        if ! get_timeline_file; then
+            return $OCF_ERR_GENERIC
+        fi
+
+        show_status "HS:connecting"
+        while :
+        do
+            IS_CONNECT_TIMEOUT=`expr $IS_CONNECT_TIMEOUT - 1`
+            if [ "$IS_CONNECT_TIMEOUT" = "0" ]; then
+                ocf_log err "Can not connect to primary on post_promote."
+                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+                return $OCF_ERR_GENERIC
+            fi
+
+            if is_connect; then
+                ocf_log info "PostgreSQL is connected to primary."
+                # TODO : I want to check xlog location difference
+                $CRM_MASTER -v $CAN_PROMOTE
+                show_status "HS:connected"
+                break
+            fi
+            ocf_log info "PostgreSQL still hasn't connected to master yet. Waiting... $IS_CONNECT_TIMEOUT"
+            sleep 1
+        done
+    fi
+    return $OCF_SUCCESS
+}
+
+pgsql_post_demote() {
+    local IS_CONNECT_TIMEOUT="10"
+    if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+        ocf_log info "post-demote called.(master is ${OCF_RESKEY_CRM_meta_notify_demote_uname})"
+
+        if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${HA_CURHOST} " ]; then
+            rm -f ${OCF_RESKEY_xlog_note}.*
+            cp $RECOVERY_CONF_BACK $RECOVERY_CONF
+            chown $OCF_RESKEY_pgdba $RECOVERY_CONF
+            pgsql_real_start
+            if [ $? -ne $OCF_SUCCESS ]; then
+                ocf_log err "PostgreSQL has not started as a hot standby."
+                return $OCF_ERR_GENERIC
+            fi
+            show_status "HS:not connected"
+
+            if [ x"${OCF_RESKEY_CRM_meta_notify_master_uname}" != "x" ]; then
+                if ! get_timeline_file; then
+                    return $OCF_ERR_GENERIC
+                    $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+                fi
+                while :
+                do
+                    IS_CONNECT_TIMEOUT=`expr $IS_CONNECT_TIMEOUT - 1`
+                    if [ "$IS_CONNECT_TIMEOUT" = "0" ]; then
+                        ocf_log err "Can not connect to primary on post_demote."
+                        $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+                        return $OCF_ERR_GENERIC
+                    fi
+
+                    if is_connect; then
+                        ocf_log info "PostgreSQL is connected to primary."
+                        # TODO : I want to check xlog location difference
+                        $CRM_MASTER -v $CAN_PROMOTE
+                        show_status "HS:connected"
+                        break
+                    fi
+                    ocf_log info "PostgreSQL still hasn't connected to master yet. Waiting... $IS_CONNECT_TIMEOUT"
+                    sleep 1
+                done
+            fi
+
+            return $OCF_SUCCESS
+        fi
+
+        if [ "${OCF_RESKEY_CRM_meta_notify_master_uname}" = "${HA_CURHOST} " ]; then
+            show_status "HS:not connected"
+        fi
+    fi
+    return $OCF_SUCCESS
+}
+
+pgsql_notify() {
+    local type="$OCF_RESKEY_CRM_meta_notify_type"
+    local op="$OCF_RESKEY_CRM_meta_notify_operation"
+
+    ocf_log debug "notify: $type for $op"
+
+    case $type in
+        post)
+            case $op in
+                promote)
+                    pgsql_post_promote
+                    return $?
+                    ;;
+                demote)
+                    pgsql_post_demote
+                    return $?
+                    ;;
+            esac
+            ;;
+    esac
+
+    return $OCF_SUCCESS
+}
+
 
 check_binary2() {
     if ! have_binary "$1"; then
@@ -866,10 +1254,15 @@ pgsql_validate_all() {
             return $OCF_ERR_CONFIGURED
         fi
 
-        dir=`dirname $OCF_RESKEY_trigger_file`
-        if ! runasowner "test -r $dir -a -w $dir"; then
-            ocf_log err "$OCF_RESKEY_pgdba can't create or remove $OCF_RESKEY_trigger_file"
-            return $OCF_ERR_CONFIGURED
+        if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
+            if [ -z "$OCF_RESKEY_ip_list" ]; then
+                ocf_log err "ip_list is null"
+                return $OCF_ERR_CONFIGURED
+            fi
+            if ! check_binary2 "$OCF_RESKEY_pgctldata" ||
+               ! check_binary2 "$CRM_FAILCOUNT"; then
+                return $OCF_ERR_INSTALLED
+            fi
         fi
     fi
 
@@ -936,8 +1329,86 @@ is_replication() {
 
 show_status() {
     if [ "$OCF_RESKEY_show_status" = "yes" ]; then
-        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v $1
+        $ATTRD_UPDATER -n $PGSQL_STATUS_NAME -v "$1"
     fi
+}
+
+check_ping() {
+    ping -c 2 -W 3 $1 > /dev/null
+    return $?
+}
+
+is_myip() {
+    $IP2UTIL -f inet addr show | grep "inet $1/" > /dev/null
+    return $?
+}
+
+is_master() {
+    local output
+    local rc
+
+    if ! check_ping "$1"; then
+        return 1
+    fi
+
+    output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $1 -p $OCF_RESKEY_pgport -Atc "$CHECK_MS_SQL" 2>&1`
+    rc=$?
+    if [ "$rc" != "0" ]; then
+        return 1
+    else
+        if [ "$output" = "f" ]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+get_timeline_file() {
+    local ip
+    local filesize
+    local TIMELINE="-1"
+    local TIMELINE_HEX="-1"
+    TIMELINE=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep TimeLineID | sed "s/ //g" | cut -d ":" -f 2`
+    ocf_log info "My timeline id is $TIMELINE(decimal)"
+    ocf_log info "searching primary on $OCF_RESKEY_ip_list"
+
+    for ip in $OCF_RESKEY_ip_list; do
+        if is_myip $ip; then
+             continue
+        fi
+        if ! is_master $ip; then
+            continue
+        else
+            ocf_log info "primary is $ip"
+            TIMELINE_HEX=`perl -e "\\$num = \"$TIMELINE\"; printf \"\%08X\",\\$num"`
+            while :
+            do
+                # increment timeline ID
+                TIMELINE_HEX=`perl -e "\\$num = hex \"$TIMELINE_HEX\"; printf \"\%08X\",++\\$num"`
+                ocf_log info "getting timeline file $TIMELINE_HEX.history"
+
+                # get timeline id file size
+                filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "SELECT pg_stat_file('pg_xlog/$TIMELINE_HEX.history')" 2>/dev/null`
+                if [ $? != "0" ]; then
+                     ocf_log info "timeline file $TIMELINE_HEX.history is not exist"
+                     break
+                fi
+                filesize=`echo $filesize | cut -d "," -f 1 | cut -d "(" -f 2 2>&1`
+                ocf_log info "$TIMELINE_HEX.history size $filesize"
+
+                # get timeline id file
+                su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc \"SELECT pg_read_file('pg_xlog/$TIMELINE_HEX.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/$TIMELINE_HEX.history 2>&1"
+                if [ $? != 0 ]; then
+                     ocf_log err "timeline file $TIMELINE_HEX is exist but I can't get."
+                     return 1
+                fi
+            done
+            return 0
+        fi
+    done
+    ocf_log warn "Primary is not exist"
+    return 1
 }
 
 #
@@ -955,6 +1426,7 @@ fi
 PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
+RECOVERY_CONF_BACK=${OCF_RESKEY_recovery_conf}
 REPRESS_MONITOR=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_monitor
 REPRESS_START=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_start
 CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
@@ -962,8 +1434,12 @@ CAN_NOT_PROMOTE="-INFINITY"
 CAN_PROMOTE="100"
 PROMOTE_ME="1000"
 CHECK_MS_SQL="select pg_is_in_recovery();"
+CHECK_LAST_XLOG_SQL="select pg_last_xlog_replay_location();"
+CHECK_REPLICATION_CLIENT_SQL="SELECT client_addr from pg_stat_replication;"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 PGSQL_STATUS_NAME="pgsql-status"
+PGSQL_XLOG_STATUS_NAME="pgsql-xlog"
+CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 
 case "$1" in
     methods)    pgsql_methods
@@ -1020,6 +1496,9 @@ case "$1" in
                 exit $?;;
 
     demote)     pgsql_demote
+                exit $?;;
+
+    notify)     pgsql_notify
                 exit $?;;
 
     stop)       pgsql_stop
