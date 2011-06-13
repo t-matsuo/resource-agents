@@ -1094,7 +1094,7 @@ pgsql_post_promote() {
             return $OCF_SUCCESS
         fi
 
-        rm -f ${OCF_RESKEY_xlog_note}.$count
+        rm -f ${OCF_RESKEY_xlog_note}.*
         if ! get_timeline_file; then
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
             return $OCF_ERR_GENERIC
