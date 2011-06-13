@@ -76,7 +76,7 @@ OCF_RESKEY_startup_method_default=auto
 OCF_RESKEY_recovery_conf_default="${OCF_RESKEY_tmpdir_default}/recovery.conf"
 OCF_RESKEY_ip_list_default=""
 OCF_RESKEY_xlog_note_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.xlog_note"
-OCF_RESKEY_xlog_check_count_default="2"
+OCF_RESKEY_xlog_check_count_default="3"
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -993,10 +993,7 @@ is_master_right() {
     local old
     local new
     local output
-    local output1
-    local output2
-    local log1
-    local log2
+    local node
 
     ocf_log debug "checking right of master"
 
@@ -1011,24 +1008,20 @@ is_master_right() {
        break
     done
 
-    for ip in $OCF_RESKEY_ip_list; do
-        if ! check_ping "$ip"; then
-            ocf_log info "$ip is not alive"
-            continue
-        fi
+    show_xlog_replay_location
+    if [ "$?" != "0" ]; then
+        $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+    fi
 
-        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "$CHECK_LAST_XLOG_SQL" 2>&1`
+    for node in ${OCF_RESKEY_CRM_meta_notify_start_uname}; do
+        output=`eval get_xlog_replay_location_by_node ${node}`
         rc=$?
         if [ "$rc" != "0" ]; then
-            ocf_log info "psql error $ip rc=$rc"
+	    ocf_log warn "can't get xlog replay location:$output:${node}"
             continue
         else
-            output1=`echo "$output" | cut -d "/" -f 1`
-                        output2=`echo "$output" | cut -d "/" -f 2`
-            log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
-            log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
-            ocf_log info "last xlog location : $ip $log1 $log2"
-            echo "$ip $log1 $log2" >> $OCF_RESKEY_xlog_note.$new
+	    ocf_log info "xlog replay location is $output : $node"
+            echo "${node} ${output}" >> $OCF_RESKEY_xlog_note.$new
         fi
     done
 
@@ -1038,7 +1031,7 @@ is_master_right() {
 
     if [ "$new" = "$OCF_RESKEY_xlog_check_count" ]; then
        newestNode=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 1`
-       if is_myip "$newestNode"; then
+       if [ "$newestNode" = "$HA_CURHOST" ]; then
            ocf_log inf "I have master right."
            return 0
        fi
@@ -1095,6 +1088,8 @@ pgsql_post_promote() {
 
     if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
         ocf_log info "post-promote called.(master is ${OCF_RESKEY_CRM_meta_notify_promote_uname})"
+	delete_xlog_replay_location
+
         if [ "${OCF_RESKEY_CRM_meta_notify_promote_uname}" = "${HA_CURHOST} " ]; then
             return $OCF_SUCCESS
         fi
@@ -1334,6 +1329,42 @@ show_status() {
     fi
 }
 
+show_xlog_replay_location() {
+    local output
+    local rc
+    local output1
+    local output2
+    local log1
+    local log2
+
+    output=`su ${OCF_RESKEY_pgdba} -c "cd ${OCF_RESKEY_pgdata}; ${OCF_RESKEY_psql} -U ${OCF_RESKEY_pgdba} -p ${OCF_RESKEY_pgport} -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
+    rc=$?
+    if [ "$rc" != "0" ]; then
+        ocf_log err "can not get xlog replay location"
+        return $rc
+    fi
+
+    output1=`echo "${output}" | cut -d "/" -f 1`
+    output2=`echo "${output}" | cut -d "/" -f 2`
+    log1=`printf "%08s\n" ${output1} | sed "s/ /0/g"`
+    log2=`printf "%08s\n" ${output2} | sed "s/ /0/g"`
+    ocf_log info "last xlog location : ${log1}/${log2}"
+    echo "${log1}${log2}"
+
+    crm_attribute --type nodes -N `uname -n` --attr-name "${PGSQL_XLOG_REPLAY_LOC_NAME}" --attr-value "${log1}${log2}" -l reboot
+    return $?
+}
+
+delete_xlog_replay_location() {
+    crm_attribute --type nodes -N `uname -n` --attr-name "${PGSQL_XLOG_REPLAY_LOC_NAME}" -D -l reboot
+    return $?
+}
+
+get_xlog_replay_location_by_node() {
+    crm_attribute --type nodes -N $1 --attr-name "${PGSQL_XLOG_REPLAY_LOC_NAME}" -G -q -l reboot
+    return $?
+}
+
 check_ping() {
     ping -c 2 -W 3 $1 > /dev/null
     return $?
@@ -1435,11 +1466,11 @@ CAN_NOT_PROMOTE="-INFINITY"
 CAN_PROMOTE="100"
 PROMOTE_ME="1000"
 CHECK_MS_SQL="select pg_is_in_recovery();"
-CHECK_LAST_XLOG_SQL="select pg_last_xlog_replay_location();"
+CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
 CHECK_REPLICATION_CLIENT_SQL="SELECT client_addr from pg_stat_replication;"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 PGSQL_STATUS_NAME="pgsql-status"
-PGSQL_XLOG_STATUS_NAME="pgsql-xlog"
+PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 
 case "$1" in
