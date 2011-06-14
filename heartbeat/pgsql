@@ -1084,7 +1084,7 @@ is_connect() {
 }
 
 pgsql_post_promote() {
-    local IS_CONNECT_TIMEOUT="10"
+    local IS_CONNECT_TIMEOUT
 
     if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
         ocf_log info "post-promote called.(master is ${OCF_RESKEY_CRM_meta_notify_promote_uname})"
@@ -1094,6 +1094,11 @@ pgsql_post_promote() {
             return $OCF_SUCCESS
         fi
 
+        IS_CONNECT_TIMEOUT=`expr ${OCF_RESKEY_CRM_meta_timeout} / 1000 - 15`
+        if [ "$IS_CONNECT_TIMEOUT" -lt "2" ]; then
+            ocf_log err "notify timeout is too small : < 18"
+            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+        fi
         rm -f ${OCF_RESKEY_xlog_note}.*
         if ! get_timeline_file; then
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
@@ -1125,9 +1130,16 @@ pgsql_post_promote() {
 }
 
 pgsql_post_demote() {
-    local IS_CONNECT_TIMEOUT="10"
+    local IS_CONNECT_TIMEOUT
+
     if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
         ocf_log info "post-demote called.(master is ${OCF_RESKEY_CRM_meta_notify_demote_uname})"
+
+        IS_CONNECT_TIMEOUT=`expr ${OCF_RESKEY_CRM_meta_timeout} / 1000 - 15`
+        if [ "$IS_CONNECT_TIMEOUT" -lt "2" ]; then
+            ocf_log err "notify timeout is too small : < 18"
+            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+        fi
 
         if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${HA_CURHOST} " ]; then
             rm -f ${OCF_RESKEY_xlog_note}.*
