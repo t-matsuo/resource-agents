@@ -994,6 +994,7 @@ is_master_right() {
     local new
     local output
     local node
+    local mylocation
 
     ocf_log debug "checking right of master"
 
@@ -1022,6 +1023,9 @@ is_master_right() {
         else
 	    ocf_log info "xlog replay location is $output : $node"
             echo "${node} ${output}" >> $OCF_RESKEY_xlog_note.$new
+	    if [ ${node} = ${HA_CURHOST} ]; then
+                mylocation=${output}
+            fi
         fi
     done
 
@@ -1031,7 +1035,12 @@ is_master_right() {
 
     if [ "$new" = "$OCF_RESKEY_xlog_check_count" ]; then
        newestNode=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 1`
+       newestXlog=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
        if [ "$newestNode" = "$HA_CURHOST" ]; then
+           ocf_log inf "I have master right."
+           return 0
+       fi
+       if [ "${newestXlog}" = "${mylocation}" ]; then
            ocf_log inf "I have master right."
            return 0
        fi
