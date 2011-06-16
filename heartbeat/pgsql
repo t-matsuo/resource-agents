@@ -1066,30 +1066,23 @@ is_connect() {
     local connectOK=1
 
     ocf_log debug "checking connection"
-    for ip in $OCF_RESKEY_ip_list; do
-        if is_myip "$ip"; then
-            continue
-        fi
 
-        if ! check_ping "$ip"; then
-            continue
-        fi
-
-        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_CLIENT_SQL" 2>&1`
+    get_master_ip force
+    if [ "$?" = "0" ]; then
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_CLIENT_SQL" 2>&1`
         rc=$?
         if [ "$rc" != "0" ]; then
-            ocf_log info "psql error $ip rc=$rc"
-            continue
+            ocf_log info "psql error $MASTER_IP rc=$rc"
         else
             if is_myip "$output"; then
                 ocf_log debug "connection OK"
-                connectOK=0
-                break
+                return 0
             fi
         fi
-    done
+    fi
 
-    return $connectOK
+    ocf_log debug "connection NG"
+    return 1
 }
 
 pgsql_post_promote() {
@@ -1417,50 +1410,88 @@ is_master() {
     return 1
 }
 
+get_master_ip() {
+    if [ "$1" != "force" ]; then
+        if [ "${MASTER_IP}" = "none" ]; then
+            return 0
+        fi
+    fi
+
+    if [ "${MASTER_IP}" = "null" ]; then
+        for ip in $OCF_RESKEY_ip_list; do
+            if is_master $ip; then
+                ocf_log info "master ip is ${MASTER_IP}."
+                MASTER_IP=${ip}
+            fi
+            if [ "${MY_IP}" != "null" ]; then
+                if is_myip $ip; then
+                    ocf_log info "my ip is ${MY_IP}."
+                    MY_IP=${ip}
+                fi
+            fi
+        done
+    fi
+
+    if [ "${MASTER_IP}" = "null" ]; then
+        ocf_log info "master is not exist."
+        MASTER_IP="none"
+        return 1
+    else
+        return 0
+    fi
+}
+
+get_my_ip() {
+    if [ "${MY_IP}" = "null" ]; then
+        for ip in $OCF_RESKEY_ip_list; do
+            if is_myip $ip; then
+                ocf_log info "my ip is ${MY_IP}."
+                MY_IP=${ip}
+            fi
+        done
+    fi
+    if [ "${MY_IP}" = "null" ]; then
+        ocf_log err "can't find my ip."
+        return 1
+    else
+        return 0
+    fi
+}
+
 get_timeline_file() {
-    local ip
     local filesize
     local TIMELINE="-1"
     local TIMELINE_HEX="-1"
     TIMELINE=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep TimeLineID | sed "s/ //g" | cut -d ":" -f 2`
     ocf_log info "My timeline id is $TIMELINE(decimal)"
-    ocf_log info "searching primary on $OCF_RESKEY_ip_list"
 
-    for ip in $OCF_RESKEY_ip_list; do
-        if is_myip $ip; then
-             continue
-        fi
-        if ! is_master $ip; then
-            continue
-        else
-            ocf_log info "primary is $ip"
-            TIMELINE_HEX=`perl -e "\\$num = \"$TIMELINE\"; printf \"\%08X\",\\$num"`
-            while :
-            do
-                # increment timeline ID
-                TIMELINE_HEX=`perl -e "\\$num = hex \"$TIMELINE_HEX\"; printf \"\%08X\",++\\$num"`
-                ocf_log info "getting timeline file $TIMELINE_HEX.history"
+    get_master_ip
+    if [ $? = "0" ]; then
+        TIMELINE_HEX=`perl -e "\\$num = \"$TIMELINE\"; printf \"\%08X\",\\$num"`
+        while :
+        do
+            # increment timeline ID
+            TIMELINE_HEX=`perl -e "\\$num = hex \"${TIMELINE_HEX}\"; printf \"\%08X\",++\\$num"`
+            ocf_log info "getting timeline file ${TIMELINE_HEX}.history"
 
-                # get timeline id file size
-                filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc "SELECT pg_stat_file('pg_xlog/$TIMELINE_HEX.history')" 2>/dev/null`
-                if [ $? != "0" ]; then
-                     ocf_log info "timeline file $TIMELINE_HEX.history is not exist"
-                     break
-                fi
-                filesize=`echo $filesize | cut -d "," -f 1 | cut -d "(" -f 2 2>&1`
-                ocf_log info "$TIMELINE_HEX.history size $filesize"
+            # get timeline id file size
+            filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc "SELECT pg_stat_file('pg_xlog/${TIMELINE_HEX}.history')" 2>/dev/null`
+            if [ $? != "0" ]; then
+                 ocf_log info "timeline file ${TIMELINE_HEX}.history is not exist"
+                 break
+            fi
+            filesize=`echo $filesize | cut -d "," -f 1 | cut -d "(" -f 2 2>&1`
+            ocf_log info "${TIMELINE_HEX}.history size $filesize"
 
-                # get timeline id file
-                su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $ip -p $OCF_RESKEY_pgport -Atc \"SELECT pg_read_file('pg_xlog/$TIMELINE_HEX.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/$TIMELINE_HEX.history 2>&1"
-                if [ $? != 0 ]; then
-                     ocf_log err "timeline file $TIMELINE_HEX is exist but I can't get."
-                     return 1
-                fi
-            done
-            return 0
-        fi
-    done
-    ocf_log warn "Primary is not exist"
+            # get timeline id file
+            su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc \"SELECT pg_read_file('pg_xlog/${TIMELINE_HEX}.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/${TIMELINE_HEX}.history 2>&1"
+            if [ $? != 0 ]; then
+                 ocf_log err "timeline file ${TIMELINE_HEX} is exist but I can't get."
+                 return 1
+            fi
+        done
+        return 0
+    fi
     return 1
 }
 
@@ -1493,6 +1524,8 @@ ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 PGSQL_STATUS_NAME="pgsql-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
+MASTER_IP="null"
+MY_IP="null"
 
 case "$1" in
     methods)    pgsql_methods
