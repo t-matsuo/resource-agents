@@ -614,9 +614,13 @@ pgsql_start() {
                 ocf_log info "PostgreSQL still hasn't connected to primary yet. Waiting..."
                 sleep 1
             done
-            $CRM_MASTER -v $CAN_PROMOTE
+            if is_streaming; then
+                $CRM_MASTER -v $CAN_PROMOTE
+                show_status "HS:streaming"
+            else
+                show_status "HS:not streaming"
+            fi
             ocf_log info "PostgreSQL is connected to primary."
-            show_status "HS:connected"
         fi
     else
         ocf_log err "startup_method \"$OCF_RESKEY_startup_method\" is invalid."
@@ -945,13 +949,35 @@ pgsql_monitor() {
             if ocf_is_probe; then
                 ocf_log warn "PostgreSQL is already running as a hot standby on probe"
                 if ! is_connect; then
-                    ocf_log info "PostgreSQL still hasn't connected to primary yet."
+                    ocf_log info "PostgreSQL still hasn't connected to primary."
                     return $OCF_ERR_GENERIC
                 fi
-                $CRM_MASTER -v $CAN_PROMOTE
                 ocf_log info "PostgreSQL is connected to primary."
-                show_status "HS:connected"
+                $CRM_MASTER -v $CAN_NOT_PROMOTE
+                show_status "HS:not streaming"
             fi
+
+            my_master_score=`crm_attribute -N ${HA_CURHOST} -n master-${OCF_RESOURCE_INSTANCE} -l reboot -G -q`
+            if is_streaming; then
+                if [ "${my_master_score}" -le "0" ] || [ "${my_master_score}" = "-INFINITY" ]; then  
+                    ocf_log info "PostgreSQL is changed to STREAMING mode."
+                    $CRM_MASTER -v $CAN_PROMOTE
+                    show_status "HS:streaming"
+                fi
+            else
+                if ! is_connect; then
+                    ocf_log info "PostgreSQL is disconnected to primary."
+                    $CRM_MASTER -v $CAN_NOT_PROMOTE
+                    show_status "HS:not connected"
+                    return $OCF_ERR_GENERIC
+                else
+                    if [ "${my_master_score}" -gt "0" ]; then  
+                        $CRM_MASTER -v $CAN_NOT_PROMOTE
+                        show_status "HS:not streaming"
+                    fi
+                fi
+            fi
+
             return $rc
         # if master doesn't exist, we check xlog.
         else
@@ -1120,8 +1146,12 @@ pgsql_post_promote() {
             if is_connect; then
                 ocf_log info "PostgreSQL is connected to primary."
                 # TODO : I want to check xlog location difference
-                $CRM_MASTER -v $CAN_PROMOTE
-                show_status "HS:connected"
+                if is_streaming; then
+                    $CRM_MASTER -v $CAN_PROMOTE
+                    show_status "HS:streaming"
+                else
+                    show_status "HS:not streaming"
+                fi
                 break
             fi
             ocf_log info "PostgreSQL still hasn't connected to master yet. Waiting... $IS_CONNECT_TIMEOUT"
@@ -1171,8 +1201,12 @@ pgsql_post_demote() {
                     if is_connect; then
                         ocf_log info "PostgreSQL is connected to primary."
                         # TODO : I want to check xlog location difference
-                        $CRM_MASTER -v $CAN_PROMOTE
-                        show_status "HS:connected"
+                        if is_streaming; then
+                            $CRM_MASTER -v $CAN_PROMOTE
+                            show_status "HS:streaming"
+                        else
+                            show_status "HS:not streaming"
+                        fi
                         break
                     fi
                     ocf_log info "PostgreSQL still hasn't connected to master yet. Waiting... $IS_CONNECT_TIMEOUT"
@@ -1495,6 +1529,26 @@ get_timeline_file() {
     return 1
 }
 
+is_streaming() {
+    get_my_ip
+    get_master_ip
+    if [ "$?" = "0" ]; then
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc "$CHECK_CATCHUP_SQL '$MY_IP'" 2>&1`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log info "psql error $ip rc=$rc"
+        else
+            if [ "$output" = "STREAMING" ]; then
+                ocf_log debug "STREAMING mode"
+                return 0
+            else
+                ocf_log info "NOT STREAMING mode : $output"
+            fi
+        fi
+    fi
+    return 1
+}
+
 #
 #   'main' starts here...
 #
@@ -1520,6 +1574,7 @@ PROMOTE_ME="1000"
 CHECK_MS_SQL="select pg_is_in_recovery();"
 CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
 CHECK_REPLICATION_CLIENT_SQL="SELECT client_addr from pg_stat_replication;"
+CHECK_CATCHUP_SQL="SELECT state from pg_stat_replication where client_addr="
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 PGSQL_STATUS_NAME="pgsql-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
