@@ -606,6 +606,7 @@ pgsql_start() {
                 return $OCF_ERR_GENERIC
             fi
 
+            show_status "HS:connecting"
             while :
             do
                 if is_connect; then
@@ -1139,6 +1140,7 @@ pgsql_post_promote() {
             IS_CONNECT_TIMEOUT=`expr $IS_CONNECT_TIMEOUT - 1`
             if [ "$IS_CONNECT_TIMEOUT" = "0" ]; then
                 ocf_log err "Can not connect to primary on post_promote."
+                show_status "HS:not connected"
                 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
                 return $OCF_ERR_GENERIC
             fi
@@ -1189,6 +1191,8 @@ pgsql_post_demote() {
                     return $OCF_ERR_GENERIC
                     $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
                 fi
+
+                show_status "HS:connecting"
                 while :
                 do
                     IS_CONNECT_TIMEOUT=`expr $IS_CONNECT_TIMEOUT - 1`
@@ -1215,9 +1219,7 @@ pgsql_post_demote() {
             fi
 
             return $OCF_SUCCESS
-        fi
-
-        if [ "${OCF_RESKEY_CRM_meta_notify_master_uname}" = "${HA_CURHOST} " ]; then
+        else
             show_status "HS:not connected"
         fi
     fi
@@ -1454,20 +1456,20 @@ get_master_ip() {
     if [ "${MASTER_IP}" = "null" ]; then
         for ip in $OCF_RESKEY_ip_list; do
             if is_master $ip; then
-                ocf_log info "master ip is ${MASTER_IP}."
                 MASTER_IP=${ip}
+                ocf_log debug "master ip is ${MASTER_IP}."
             fi
             if [ "${MY_IP}" != "null" ]; then
                 if is_myip $ip; then
-                    ocf_log info "my ip is ${MY_IP}."
                     MY_IP=${ip}
+                    ocf_log debug "my ip is ${MY_IP}."
                 fi
             fi
         done
     fi
 
     if [ "${MASTER_IP}" = "null" ]; then
-        ocf_log info "master is not exist."
+        ocf_log err "Can not connect to primary."
         MASTER_IP="none"
         return 1
     else
@@ -1479,8 +1481,8 @@ get_my_ip() {
     if [ "${MY_IP}" = "null" ]; then
         for ip in $OCF_RESKEY_ip_list; do
             if is_myip $ip; then
-                ocf_log info "my ip is ${MY_IP}."
                 MY_IP=${ip}
+                ocf_log debug "my ip is ${MY_IP}."
             fi
         done
     fi
