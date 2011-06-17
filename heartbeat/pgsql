@@ -970,7 +970,6 @@ pgsql_monitor() {
                     ocf_log info "PostgreSQL is disconnected to primary."
                     $CRM_MASTER -v $CAN_NOT_PROMOTE
                     show_status "HS:not connected"
-                    return $OCF_ERR_GENERIC
                 else
                     if [ "${my_master_score}" -gt "0" ]; then  
                         $CRM_MASTER -v $CAN_NOT_PROMOTE
