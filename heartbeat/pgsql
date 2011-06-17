@@ -769,6 +769,7 @@ pgsql_stop() {
     fi
 
     $CRM_MASTER -v $CAN_NOT_PROMOTE
+    delete_xlog_replay_location
 
     if ! pgsql_status
     then
