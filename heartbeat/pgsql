@@ -70,6 +70,7 @@ OCF_RESKEY_monitor_sql_default="select now();"
 # Defaults for replication
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_rep_mode_default=none
+OCF_RESKEY_rep_mode_conf_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.rep_mode.conf"
 OCF_RESKEY_show_status_default=no
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_startup_method_default=auto
@@ -95,6 +96,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 # for replication
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
+: ${OCF_RESKEY_rep_mode_conf=${OCF_RESKEY_rep_mode_conf_default}}
 : ${OCF_RESKEY_show_status=${OCF_RESKEY_show_status_default}}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_startup_method=${OCF_RESKEY_startup_method_default}}
@@ -265,11 +267,22 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 
 <parameter name="rep_mode" unique="0" required="0">
 <longdesc lang="en">
-Replication mode(none/async).
-"aync" requires PostgreSQL 9.1 or later.
+Replication mode(none/async/sync).
+"aync","sync" require PostgreSQL 9.1 or later.
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
 <content type="string" default="${OCF_RESKEY_rep_mode_default}" />
+</parameter>
+
+<parameter name="rep_mode_conf" unique="0" required="0">
+<longdesc lang="en">
+Path to rep_mode.conf file.
+This file is used for "rep_mode=sync" to change replication mode by RA.
+postgresql.conf needs include this file and don't write
+synchronous_standby_names directive.
+</longdesc>
+<shortdesc lang="en">rep_mode_conf</shortdesc>
+<content type="string" default="${OCF_RESKEY_rep_mode_conf_default}" />
 </parameter>
 
 <parameter name="tmpdir" unique="0" required="0">
@@ -425,6 +438,7 @@ EOF
 
 #pgsql_start: Starts PostgreSQL
 pgsql_real_start() {
+    local rc
     local pgctl_options
     local postgres_options
 
@@ -587,11 +601,12 @@ pgsql_start() {
         if [ ! -f "$RECOVERY_CONF" ]; then
             ocf_log err "recovery.conf doesn't exist."
             return $OCF_ERR_INSTALLED;
-	fi
+        fi
 
         ocf_log info "auto start"
         $CRM_MASTER -v $CAN_NOT_PROMOTE
 
+        set_async_mode
         pgsql_real_start
         if [ $? -ne $OCF_SUCCESS ]; then
             ocf_log err "PostgreSQL has not started as a hot standby."
@@ -615,7 +630,7 @@ pgsql_start() {
                 ocf_log info "PostgreSQL still hasn't connected to primary yet. Waiting..."
                 sleep 1
             done
-            if is_streaming; then
+            if can_promote; then
                 $CRM_MASTER -v $CAN_PROMOTE
                 show_status "HS:streaming"
             else
@@ -708,11 +723,14 @@ pgsql_demote() {
     fi
 
     show_status "STOP"
+    set_async_mode
     return $OCF_SUCCESS
 }
 
 #pgsql_stop: Stop PostgreSQL
 pgsql_real_stop() {
+    local rc
+
     if ! pgsql_status
     then
         #Already stopped
@@ -763,6 +781,8 @@ pgsql_real_stop() {
 
 #pgsql_stop
 pgsql_stop() {
+    local rc
+
     if ! is_replication; then
         pgsql_real_stop
         return $?
@@ -811,6 +831,7 @@ pgsql_status() {
 #
 
 pgsql_real_monitor() {
+    local rc
     local loglevel
     local psql_options
     local output
@@ -877,6 +898,8 @@ pgsql_real_monitor() {
 pgsql_monitor() {
     local rc
     local masters
+    local rep_state
+    local my_master_score
 
     if ! is_replication; then
         pgsql_real_monitor
@@ -934,18 +957,47 @@ pgsql_monitor() {
         pgsql_real_monitor
         rc=$?
 
-        if [ "$rc" = "$OCF_RUNNING_MASTER" ] && ocf_is_probe; then
-            ocf_log warn "PostgreSQL is already running as a primary on probe"
-            $CRM_MASTER -v $CAN_PROMOTE
-            show_status "PRI"
+        # If I am Master
+        if [ "$rc" = "$OCF_RUNNING_MASTER" ]; then
+            if ocf_is_probe; then
+                ocf_log warn "PostgreSQL is already running as a primary on probe"
+                $CRM_MASTER -v $CAN_PROMOTE
+                show_status "PRI:async"
+                return $rc
+            fi
+
+            # check slave's connection and select replication mode
+            if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+                check_replication_state
+                rep_state=$?
+                if [ "$rep_state" = $STATE_STREAMING_SYNC ] ; then
+                    ocf_log debug "Primary is already sync mode"
+                    show_status "PRI:sync"
+                elif [ "$rep_state" = $STATE_STREAMING_ASYNC ] ; then
+                    if set_sync_mode; then
+                        reload_conf
+                        show_status "PRI:sync"
+                    fi
+                else
+                    if set_async_mode; then
+                        # TODO replress slave's promote
+                        reload_conf
+                        show_status "PRI:async"
+                    fi
+                fi
+            fi
         fi
 
         if [ "$rc" != $OCF_SUCCESS ]; then
             return $rc
         fi
 
+        # If I am Slave
+
         # hmm... I can't get master name on monitor. It's bug ...
+        # http://developerbugs.linux-foundation.org/show_bug.cgi?id=2607
         # if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+
         masters=`crm_mon -1 | grep "Masters: \["`
         if [ "x$masters" != "x" ]; then
             if ocf_is_probe; then
@@ -960,7 +1012,7 @@ pgsql_monitor() {
             fi
 
             my_master_score=`crm_attribute -N ${HA_CURHOST} -n master-${OCF_RESOURCE_INSTANCE} -l reboot -G -q`
-            if is_streaming; then
+            if can_promote; then
                 if [ "${my_master_score}" -le "0" ] || [ "${my_master_score}" = "-INFINITY" ]; then  
                     ocf_log info "PostgreSQL is changed to STREAMING mode."
                     $CRM_MASTER -v $CAN_PROMOTE
@@ -969,11 +1021,9 @@ pgsql_monitor() {
             else
                 if ! is_connect; then
                     ocf_log info "PostgreSQL is disconnected to primary."
-                    $CRM_MASTER -v $CAN_NOT_PROMOTE
                     show_status "HS:not connected"
                 else
                     if [ "${my_master_score}" -gt "0" ]; then  
-                        $CRM_MASTER -v $CAN_NOT_PROMOTE
                         show_status "HS:not streaming"
                     fi
                 fi
@@ -1011,7 +1061,7 @@ wait_promoted() {
         ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
     done
     ocf_log info "PostgreSQL is promoted."
-    show_status "PRI"
+    show_status "PRI:async"
     return 0
 }
 
@@ -1038,6 +1088,7 @@ is_master_right() {
 
     show_xlog_replay_location
     if [ "$?" != "0" ]; then
+        ocf_log err "show_xlog_replay_location failed"
         $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
     fi
 
@@ -1064,11 +1115,11 @@ is_master_right() {
        newestNode=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 1`
        newestXlog=`cat $OCF_RESKEY_xlog_note.$new | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
        if [ "$newestNode" = "$HA_CURHOST" ]; then
-           ocf_log inf "I have master right."
+           ocf_log info "I have master right."
            return 0
        fi
        if [ "${newestXlog}" = "${mylocation}" ]; then
-           ocf_log inf "I have master right."
+           ocf_log info "I have master right."
            return 0
        fi
        ocf_log info "I have no master right."
@@ -1089,6 +1140,7 @@ is_master_right() {
 
 # for checking timeline.
 is_connect() {
+    local rc
     local output
     local connectOK=1
 
@@ -1148,7 +1200,7 @@ pgsql_post_promote() {
             if is_connect; then
                 ocf_log info "PostgreSQL is connected to primary."
                 # TODO : I want to check xlog location difference
-                if is_streaming; then
+                if can_promote; then
                     $CRM_MASTER -v $CAN_PROMOTE
                     show_status "HS:streaming"
                 else
@@ -1165,6 +1217,7 @@ pgsql_post_promote() {
 
 pgsql_post_demote() {
     local IS_CONNECT_TIMEOUT
+    local my_fail_count
 
     if [ "$OCF_RESKEY_startup_method" = "auto" ]; then
         ocf_log info "post-demote called.(master is ${OCF_RESKEY_CRM_meta_notify_demote_uname})"
@@ -1176,6 +1229,12 @@ pgsql_post_demote() {
         fi
 
         if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${HA_CURHOST} " ]; then
+            my_fail_count=`crm resource failcount ${OCF_RESOURCE_INSTANCE} show ${OCF_RESKEY_CRM_meta_notify_demote_uname} | sed -e "s/.*value=//g"`
+            if [ "$my_fail_count" != "0" ]; then
+                ocf_log info "My faicount=${my_fail_count}, so I don't restart on post_demote"
+                return $OCF_ERR_GENERIC
+            fi
+
             rm -f ${OCF_RESKEY_xlog_note}.*
             cp $RECOVERY_CONF_BACK $RECOVERY_CONF
             chown $OCF_RESKEY_pgdba $RECOVERY_CONF
@@ -1204,8 +1263,7 @@ pgsql_post_demote() {
 
                     if is_connect; then
                         ocf_log info "PostgreSQL is connected to primary."
-                        # TODO : I want to check xlog location difference
-                        if is_streaming; then
+                        if can_promote; then
                             $CRM_MASTER -v $CAN_PROMOTE
                             show_status "HS:streaming"
                         else
@@ -1310,6 +1368,16 @@ pgsql_validate_all() {
                 return $OCF_ERR_INSTALLED
             fi
         fi
+        if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+            if [ ! -n "$OCF_RESKEY_rep_mode_conf" ]; then
+                return $OCF_ERR_CONFIGURED
+            fi
+            touch $OCF_RESKEY_rep_mode_conf
+            if [ "$?" != "0" ]; then
+                ocf_log err "Can't create $OCF_RESKEY_rep_mode_conf"
+                return $OCF_ERR_INSTALLED
+            fi
+        fi
     fi
 
     return $OCF_SUCCESS
@@ -1398,7 +1466,7 @@ show_xlog_replay_location() {
     output2=`echo "${output}" | cut -d "/" -f 2`
     log1=`printf "%08s\n" ${output1} | sed "s/ /0/g"`
     log2=`printf "%08s\n" ${output2} | sed "s/ /0/g"`
-    ocf_log info "last xlog location : ${log1}/${log2}"
+    ocf_log info "my xlog replay location : ${log1}/${log2}"
     echo "${log1}${log2}"
 
     crm_attribute --type nodes -N `uname -n` --attr-name "${PGSQL_XLOG_REPLAY_LOC_NAME}" --attr-value "${log1}${log2}" -l reboot
@@ -1531,24 +1599,155 @@ get_timeline_file() {
     return 1
 }
 
-is_streaming() {
-    get_my_ip
+# This needs be called by Slave
+# If rep_mode is async, we can promote when state is "STREAMING"
+# If rep_mode is sync, we can promote when state is "STREAMING" and sync_state is "SYNC"
+can_promote() {
+    local rc
+    local output
+    local my_hostname
+    local state
+    local sync_state
+
     get_master_ip
     if [ "$?" = "0" ]; then
-        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc "$CHECK_CATCHUP_SQL '$MY_IP'" 2>&1`
+        my_hostname=`uname -n`
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $MASTER_IP -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL where application_name='$my_hostname';" 2>&1`
         rc=$?
         if [ "$rc" != "0" ]; then
             ocf_log info "psql error $ip rc=$rc"
         else
-            if [ "$output" = "STREAMING" ]; then
-                ocf_log debug "STREAMING mode"
+            state=`echo $output | cut -d "|" -f 1`
+            sync_state=`echo $output | cut -d "|" -f 2`
+            if [ "$state" = "STREAMING" ]; then
+                ocf_log debug "I am STREAMING mode"
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+                    if [ "$sync_state" = "SYNC" ]; then
+                        ocf_log debug "I am STREAMING mode and syncing"
+                        return 0
+                    else
+                        ocf_log debug "I am STREAMING mode but not syncing"
+                        return 1
+                    fi
+                fi
                 return 0
             else
-                ocf_log info "NOT STREAMING mode : $output"
+                ocf_log info "I am not STREAMING mode : $output"
             fi
         fi
     fi
     return 1
+}
+
+# This needs be called by Master when rep_mode=sync
+check_replication_state() {
+    local rc
+    local output
+    local state
+    local sync_state
+
+    get_my_ip
+    get_master_ip
+
+    if [ "$?" = "0" ]; then
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log info "psql error $ip rc=$rc"
+        elif [ ! -n "$output" ]; then
+            ocf_log info "There is no HS"
+            return $STATE_INVALID
+        else
+            state=`echo $output | cut -d "|" -f 1`
+            sync_state=`echo $output | cut -d "|" -f 2`
+            if [ "$state" = "STREAMING" ]; then
+                ocf_log debug "HS is STREAMING mode"
+                if [ "$sync_state" = "ASYNC" ]; then
+                    return $STATE_STREAMING_ASYNC
+                fi
+                if [ "$sync_state" = "SYNC" ]; then
+                    return $STATE_STREAMING_SYNC
+                fi
+                return $STATE_INVALID
+            else
+                ocf_log info "HS is not STREAMING mode : $output"
+                if [ "$sync_state" = "ASYNC" ]; then
+                    return $STATE_NOT_STREAMING_ASYNC
+                fi
+                if [ "$sync_state" = "SYNC" ]; then
+                    return $STATE_NOT_STREAMING_SYNC
+                fi
+                return $STATE_INVALID
+            fi
+        fi
+    fi
+    return $STATE_INVALID
+}
+
+
+set_async_mode() {
+    if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
+        return 1
+    fi
+
+    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+    if [ "$?" != "0" ]; then
+        ocf_log debug "Already async mode"
+        return 2
+    fi
+
+    ocf_log info "set sync mode"
+    echo "" > "$OCF_RESKEY_rep_mode_conf"
+}
+
+set_sync_mode() {
+    if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
+        ocf_log info "Can't change sync mode. rep_mode is $OCF_RESKEY_rep_mode"
+        return 1
+    fi
+
+    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+    if [ "$?" = "0" ]; then
+        ocf_log debug "Already sync mode"
+        return 2
+    fi
+
+    echo "synchronous_standby_names = '*'" > "$OCF_RESKEY_rep_mode_conf"
+    ocf_log info "set sync mode"
+    return 0
+}
+
+reload_conf() {
+    # Set options passed to pg_ctl
+    pgctl_options="$OCF_RESKEY_ctl_opt -D $OCF_RESKEY_pgdata -l $OCF_RESKEY_logfile"
+
+    # Set options passed to the PostgreSQL server process
+    postgres_options=""
+    if [ -n "$OCF_RESKEY_config" ]; then
+	postgres_options="$postgres_options -c config_file=${OCF_RESKEY_config}"
+    fi
+    if [ -n "$OCF_RESKEY_pghost" ]; then
+	postgres_options="$postgres_options -h $OCF_RESKEY_pghost"
+    fi
+    if [ -n "$OCF_RESKEY_start_opt" ]; then
+	postgres_options="$postgres_options $OCF_RESKEY_start_opt"
+    fi
+
+    # Tack pass-through options onto pg_ctl options
+    if [ -n "$postgres_options" ]; then
+	pgctl_options="$pgctl_options -o '$postgres_options'"
+    fi
+
+    # Invoke pg_ctl
+    runasowner "$OCF_RESKEY_pgctl $pgctl_options reload"
+    if [ $? -eq 0 ]; then
+        ocf_log info "Reload configuration file."
+    else
+	ocf_log err "Can't reload configuration file."
+        return 1
+    fi
+
+    return 0
 }
 
 #
@@ -1565,6 +1764,7 @@ fi
 
 PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
+
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
 RECOVERY_CONF_BACK=${OCF_RESKEY_recovery_conf}
 REPRESS_MONITOR=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_monitor
@@ -1576,13 +1776,19 @@ PROMOTE_ME="1000"
 CHECK_MS_SQL="select pg_is_in_recovery();"
 CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
 CHECK_REPLICATION_CLIENT_SQL="SELECT client_addr from pg_stat_replication;"
-CHECK_CATCHUP_SQL="SELECT state from pg_stat_replication where client_addr="
+CHECK_REPLICATION_STATE_SQL="SELECT state,sync_state from pg_stat_replication"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 PGSQL_STATUS_NAME="pgsql-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 MASTER_IP="null"
 MY_IP="null"
+
+STATE_STREAMING_ASYNC="1"
+STATE_STREAMING_SYNC="2"
+STATE_NOT_STREAMING_ASYNC="3"
+STATE_NOT_STREAMING_SYNC="4"
+STATE_INVALID="5"
 
 case "$1" in
     methods)    pgsql_methods
