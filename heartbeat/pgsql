@@ -633,6 +633,7 @@ pgsql_start() {
             if can_promote; then
                 $CRM_MASTER -v $CAN_PROMOTE
                 show_status "HS:streaming"
+                rm -f $REPRESS_PROMOTE
             else
                 show_status "HS:not streaming"
             fi
@@ -963,6 +964,7 @@ pgsql_monitor() {
                 ocf_log warn "PostgreSQL is already running as a primary on probe"
                 $CRM_MASTER -v $CAN_PROMOTE
                 show_status "PRI:async"
+                rm -f $REPRESS_PROMOTE
                 return $rc
             fi
 
@@ -1000,6 +1002,7 @@ pgsql_monitor() {
 
         masters=`crm_mon -1 | grep "Masters: \["`
         if [ "x$masters" != "x" ]; then
+
             if ocf_is_probe; then
                 ocf_log warn "PostgreSQL is already running as a hot standby on probe"
                 if ! is_connect; then
@@ -1016,8 +1019,9 @@ pgsql_monitor() {
                 if [ "${my_master_score}" -le "0" ] || [ "${my_master_score}" = "-INFINITY" ]; then  
                     ocf_log info "PostgreSQL is changed to STREAMING mode."
                     $CRM_MASTER -v $CAN_PROMOTE
-                    show_status "HS:streaming"
+                    rm -f $REPRESS_PROMOTE
                 fi
+                show_status "HS:streaming"
             else
                 if ! is_connect; then
                     ocf_log info "PostgreSQL is disconnected to primary."
@@ -1075,6 +1079,11 @@ is_master_right() {
 
     ocf_log debug "checking right of master"
 
+    if [ -f $REPRESS_PROMOTE ]; then
+        ocf_log warn "$REPRESS_PROMOTE file is exist."
+        return 1
+    fi
+
     old=1
     new=1
     for count in `seq $OCF_RESKEY_xlog_check_count`; do
@@ -1123,6 +1132,11 @@ is_master_right() {
            return 0
        fi
        ocf_log info "I have no master right."
+       if ! touch $REPRESS_PROMOTE; then
+            ocf_log err "can't create $REPRESS_PROMOTE"
+            return 1
+       fi
+       ocf_log info "$REPRESS_PROMOTE file was created"
     else
         oldfile=`cat ${OCF_RESKEY_xlog_note}.$old`
         newfile=`cat ${OCF_RESKEY_xlog_note}.$new`
@@ -1203,6 +1217,7 @@ pgsql_post_promote() {
                 if can_promote; then
                     $CRM_MASTER -v $CAN_PROMOTE
                     show_status "HS:streaming"
+                    rm -f $REPRESS_PROMOTE
                 else
                     show_status "HS:not streaming"
                 fi
@@ -1266,6 +1281,7 @@ pgsql_post_demote() {
                         if can_promote; then
                             $CRM_MASTER -v $CAN_PROMOTE
                             show_status "HS:streaming"
+                            rm -f $REPRESS_PROMOTE
                         else
                             show_status "HS:not streaming"
                         fi
@@ -1626,7 +1642,7 @@ can_promote() {
                         ocf_log debug "I am STREAMING mode and syncing"
                         return 0
                     else
-                        ocf_log debug "I am STREAMING mode but not syncing"
+                        ocf_log info "I am STREAMING mode but not syncing"
                         return 1
                     fi
                 fi
@@ -1769,6 +1785,7 @@ RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
 RECOVERY_CONF_BACK=${OCF_RESKEY_recovery_conf}
 REPRESS_MONITOR=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_monitor
 REPRESS_START=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_start
+REPRESS_PROMOTE=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_promote
 CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
 CAN_NOT_PROMOTE="-INFINITY"
 CAN_PROMOTE="100"
