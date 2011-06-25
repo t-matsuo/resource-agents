@@ -76,6 +76,7 @@ OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_startup_method_default=auto
 OCF_RESKEY_recovery_conf_default="${OCF_RESKEY_tmpdir_default}/recovery.conf"
 OCF_RESKEY_ip_list_default=""
+OCF_RESKEY_node_list_default=""
 OCF_RESKEY_xlog_note_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.xlog_note"
 OCF_RESKEY_xlog_check_count_default="3"
 
@@ -102,6 +103,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_startup_method=${OCF_RESKEY_startup_method_default}}
 : ${OCF_RESKEY_recovery_conf=${OCF_RESKEY_recovery_conf_default}}
 : ${OCF_RESKEY_ip_list=${OCF_RESKEY_ip_list_default}}
+: ${OCF_RESKEY_node_list=${OCF_RESKEY_node_list_default}}
 : ${OCF_RESKEY_xlog_note=${OCF_RESKEY_xlog_note_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
@@ -341,6 +343,15 @@ Used for startup_method="auto".
 </longdesc>
 <shortdesc lang="en">ip list</shortdesc>
 <content type="string" default="${OCF_RESKEY_ip_list_default}" />
+</parameter>
+
+<parameter name="node_list" unique="0" required="0">
+<longdesc lang="en">
+All node names to use replication.
+Used for startup_method="auto".
+</longdesc>
+<shortdesc lang="en">node list</shortdesc>
+<content type="string" default="${OCF_RESKEY_node_list_default}" />
 </parameter>
 
 <parameter name="xlog_note" unique="0" required="0">
@@ -901,6 +912,9 @@ pgsql_monitor() {
     local masters
     local rep_state
     local my_master_score
+    local rsc
+    local node
+    local max_clone
 
     if ! is_replication; then
         pgsql_real_monitor
@@ -981,8 +995,33 @@ pgsql_monitor() {
                         show_status "PRI:sync"
                     fi
                 else
+                    # if I am already sync mode
+                    if is_sync_mode; then
+                        rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+                        # bug .... I can't get start_uname correctly.
+                        # ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_CRM_meta_notify_start_uname clone_max=$OCF_RESKEY_CRM_meta_clone_max"
+                        #for node in $OCF_RESKEY_CRM_meta_notify_start_uname; do
+
+                        ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_node_list clone_max=$OCF_RESKEY_CRM_meta_clone_max"
+                        for node in $OCF_RESKEY_node_list; do
+                            if [ "$node" = "$HA_CURHOST" ];then
+                                continue
+                            fi
+                            ocf_log info "Failing $rsc on $node. Probably slave or LAN is dead."
+                            instance=0
+                            while :
+                            do
+                                if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+                                    break
+                                fi
+                                if [ x"$node" != "x" ];then
+                                    $CRM_FAILCOUNT -r ${rsc}:${instance} -U $node -v INFINITY
+                                fi
+                                instance=`expr $instance + 1`
+                            done
+                        done
+                    fi
                     if set_async_mode; then
-                        # TODO replress slave's promote
                         reload_conf
                         show_status "PRI:async"
                     fi
@@ -1731,6 +1770,17 @@ set_sync_mode() {
     echo "synchronous_standby_names = '*'" > "$OCF_RESKEY_rep_mode_conf"
     ocf_log info "set sync mode"
     return 0
+}
+
+is_sync_mode() {
+    if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
+        return 0
+    fi
+    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+    if [ "$?" = "0" ]; then
+        return 0
+    fi
+    return 1
 }
 
 reload_conf() {
