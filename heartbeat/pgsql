@@ -1696,7 +1696,7 @@ set_async_mode() {
         return 2
     fi
 
-    ocf_log info "set sync mode"
+    ocf_log info "set async mode"
     echo "" > "$OCF_RESKEY_rep_mode_conf"
 }
 
