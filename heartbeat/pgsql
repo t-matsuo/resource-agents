@@ -644,7 +644,6 @@ pgsql_start() {
             if can_promote; then
                 $CRM_MASTER -v $CAN_PROMOTE
                 show_status "HS:streaming"
-                rm -f $REPRESS_PROMOTE
             else
                 show_status "HS:not streaming"
             fi
@@ -701,6 +700,10 @@ pgsql_promote() {
     # auto start
     elif [ "$OCF_RESKEY_startup_method" = "auto" ]; then
         rm -f ${OCF_RESKEY_xlog_note}.*
+        if [ -f $REPRESS_PROMOTE ]; then
+            ocf_log warn "${REPRESS_PROMOTE} file is exist"
+            return $OCF_ERR_GENERIC
+        fi
         runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
         wait_promoted
         $CRM_MASTER -v $PROMOTE_ME
@@ -1058,7 +1061,6 @@ pgsql_monitor() {
                 if [ "${my_master_score}" -le "0" ] || [ "${my_master_score}" = "-INFINITY" ]; then  
                     ocf_log info "PostgreSQL is changed to STREAMING mode."
                     $CRM_MASTER -v $CAN_PROMOTE
-                    rm -f $REPRESS_PROMOTE
                 fi
                 show_status "HS:streaming"
             else
@@ -1256,7 +1258,6 @@ pgsql_post_promote() {
                 if can_promote; then
                     $CRM_MASTER -v $CAN_PROMOTE
                     show_status "HS:streaming"
-                    rm -f $REPRESS_PROMOTE
                 else
                     show_status "HS:not streaming"
                 fi
@@ -1283,6 +1284,11 @@ pgsql_post_demote() {
         fi
 
         if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${HA_CURHOST} " ]; then
+            if [ -f $REPRESS_PROMOTE ]; then
+                ocf_log warn "${REPRESS_PROMOTE} file is exist so I don't restart"
+                return $OCF_SUCCESS
+            fi
+
             my_fail_count=`crm resource failcount ${OCF_RESOURCE_INSTANCE} show ${OCF_RESKEY_CRM_meta_notify_demote_uname} | sed -e "s/.*value=//g"`
             if [ "$my_fail_count" != "0" ]; then
                 ocf_log info "My faicount=${my_fail_count}, so I don't restart on post_demote"
@@ -1320,7 +1326,6 @@ pgsql_post_demote() {
                         if can_promote; then
                             $CRM_MASTER -v $CAN_PROMOTE
                             show_status "HS:streaming"
-                            rm -f $REPRESS_PROMOTE
                         else
                             show_status "HS:not streaming"
                         fi
@@ -1679,9 +1684,13 @@ can_promote() {
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     if [ "$sync_state" = "SYNC" ]; then
                         ocf_log debug "I am STREAMING mode and syncing"
+                        rm -f $REPRESS_PROMOTE
                         return 0
                     else
                         ocf_log info "I am STREAMING mode but not syncing"
+                        if ! touch $REPRESS_PROMOTE; then
+                            ocf_log err "can't create $REPRESS_PROMOTE"
+                        fi
                         return 1
                     fi
                 fi
