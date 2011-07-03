@@ -540,7 +540,7 @@ pgsql_start() {
 
         $CRM_MASTER -v $CAN_NOT_PROMOTE
 
-        set_async_mode
+        set_async_mode_all
         pgsql_real_start
         rc=$?
     fi
@@ -652,7 +652,7 @@ pgsql_demote() {
         return $rc
     fi
     show_status "STOP"
-    set_async_mode
+    set_async_mode_all
     return $OCF_SUCCESS
 }
 
@@ -830,6 +830,7 @@ pgsql_monitor() {
     local rep_state
     local my_master_score
     local rsc
+    local target
     local node
     local max_clone
 
@@ -855,48 +856,54 @@ pgsql_monitor() {
 
         # check slave's connection and select replication mode
         if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            check_replication_state
-            rep_state=$?
-            if [ "$rep_state" = $STATE_STREAMING_SYNC ] ; then
-                ocf_log debug "Primary is already sync mode"
-                show_status "PRI:sync"
-            elif [ "$rep_state" = $STATE_STREAMING_ASYNC ] ; then
-                if set_sync_mode; then
-                    reload_conf
-                    show_status "PRI:sync"
+            for target in $OCF_RESKEY_node_list; do
+                if [ "${target}" = "${MY_HOSTNAME}" ]; then
+                    continue
                 fi
-            else
-                # I am already sync mode but HS is not STREAMING. Transaction is probably stopped!!
-                if is_sync_mode; then
-                    rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
-                    # bug .... I can't get start_uname correctly.
-                    # ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_CRM_meta_notify_start_uname clone_max=$OCF_RESKEY_CRM_meta_clone_max"
-                    #for node in $OCF_RESKEY_CRM_meta_notify_start_uname; do
 
-                    ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_node_list clone_max=$OCF_RESKEY_CRM_meta_clone_max"
-                    for node in $OCF_RESKEY_node_list; do
-                        if [ "$node" = "$MY_HOSTNAME" ];then
-                            continue
-                        fi
-                        ocf_log info "Failing $rsc on $node. Probably slave or LAN is dead."
-                        instance=0
-                        while :
-                        do
-                            if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
-                                break
+                check_replication_state ${target}
+                rep_state=$?
+                if [ "$rep_state" = $STATE_STREAMING_SYNC ] ; then
+                    ocf_log debug "Primary is already sync mode"
+                    show_status "PRI:sync"
+                elif [ "$rep_state" = $STATE_STREAMING_ASYNC ] ; then
+                    if set_sync_mode ${target}; then
+                        reload_conf
+                        show_status "PRI:sync"
+                    fi
+                else
+                    # I am already sync mode but HS is not STREAMING. Transaction is probably stopped!!
+                    if is_sync_mode ${target}; then
+                        rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+                        # bug .... I can't get start_uname correctly.
+                        # ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_CRM_meta_notify_start_uname clone_max=$OCF_RESKEY_CRM_meta_clone_max"
+                        #for node in $OCF_RESKEY_CRM_meta_notify_start_uname; do
+    
+                        ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_node_list clone_max=$OCF_RESKEY_CRM_meta_clone_max"
+                        for node in $OCF_RESKEY_node_list; do
+                            if [ "$node" = "$MY_HOSTNAME" ];then
+                                continue
                             fi
-                            if [ x"$node" != "x" ];then
-                                $CRM_FAILCOUNT -r ${rsc}:${instance} -U $node -v INFINITY
-                            fi
-                            instance=`expr $instance + 1`
+                            ocf_log info "Failing $rsc on $node. Probably slave or LAN is dead."
+                            instance=0
+                            while :
+                            do
+                                if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+                                    break
+                                fi
+                                if [ x"$node" != "x" ];then
+                                    $CRM_FAILCOUNT -r ${rsc}:${instance} -U $node -v INFINITY
+                                fi
+                                instance=`expr $instance + 1`
+                            done
                         done
-                    done
+                    fi
+                    if set_async_mode ${target}; then
+                        reload_conf
+                        show_status "PRI:async"
+                    fi
                 fi
-                if set_async_mode; then
-                    reload_conf
-                    show_status "PRI:async"
-                fi
-            fi
+            done
         fi
         return $rc
     fi
@@ -1582,11 +1589,15 @@ check_replication_state() {
     local state
     local sync_state
 
+    if [ x"$1" = "x" ]; then
+        ocf_log err "invalid args on check_replication_state()"
+        return $STATE_INVALID
+    fi
+
     get_my_ip
     get_master_ip
-
     if [ "$?" = "0" ]; then
-        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`
+        output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL where application_name='$1';" 2>&1`
         rc=$?
         if [ "$rc" != "0" ]; then
             ocf_log info "psql error $ip rc=$rc"
@@ -1620,19 +1631,29 @@ check_replication_state() {
     return $STATE_INVALID
 }
 
+set_async_mode_all() {
+    ocf_log info "set async mode all"
+    echo "" > "$OCF_RESKEY_rep_mode_conf"
+}
 
 set_async_mode() {
     if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
         return 1
     fi
 
-    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+    if [ x"$1" = "x" ]; then
+        ocf_log err "invalid args on set_sync_mode()"
+        return 1
+    fi
+
+    grep "synchronous_standby_names.*$1" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
     if [ "$?" != "0" ]; then
         ocf_log debug "Already async mode"
         return 2
     fi
 
-    ocf_log info "set async mode"
+    ocf_log info "set async mode $1"
+    # TODO:support N nodes
     echo "" > "$OCF_RESKEY_rep_mode_conf"
 }
 
@@ -1642,14 +1663,20 @@ set_sync_mode() {
         return 1
     fi
 
-    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+    if [ x"$1" = "x" ]; then
+        ocf_log err "invalid args on set_sync_mode()"
+        return 1
+    fi
+
+    grep "synchronous_standby_names.*$1" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
     if [ "$?" = "0" ]; then
         ocf_log debug "Already sync mode"
         return 2
     fi
 
-    echo "synchronous_standby_names = '*'" > "$OCF_RESKEY_rep_mode_conf"
-    ocf_log info "set sync mode"
+    # TODO:support N nodes
+    echo "synchronous_standby_names = '$1'" > "$OCF_RESKEY_rep_mode_conf"
+    ocf_log info "set sync mode $1"
     return 0
 }
 
@@ -1657,7 +1684,13 @@ is_sync_mode() {
     if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
         return 0
     fi
-    grep "synchronous_standby_names" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
+
+    if [ x"$1" = "x" ]; then
+        ocf_log err "invalid args on is_sync_mode()"
+        return 1
+    fi
+
+    grep "synchronous_standby_names.*$1" $OCF_RESKEY_rep_mode_conf > /dev/null 2>&1
     if [ "$?" = "0" ]; then
         return 0
     fi
