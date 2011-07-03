@@ -1249,7 +1249,11 @@ can_promote() {
             fi
         else
             if [ "$rc" = "$STATE_STREAMING_ASYNC" ]; then
+                rm -f $REPRESS_PROMOTE
                 return 0
+            else
+                touch $REPRESS_PROMOTE
+                return 1
             fi
         fi
     fi
