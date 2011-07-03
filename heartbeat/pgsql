@@ -272,7 +272,7 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 Replication mode(none(default)/async/sync).
 "aync","sync" require PostgreSQL 9.1 or later.
 If you use async or sync, it requires node_list, ip_list, restore_command
-parameters, and needs setting postgresql.conf, pg_hba.conf up for 
+parameters, and needs setting postgresql.conf, pg_hba.conf up for
 replication.
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
@@ -290,7 +290,7 @@ This is required for replication.
 
 <parameter name="ip_list" unique="0" required="0">
 <longdesc lang="en">
-IP list for replication LAN. 
+IP list for replication LAN.
 Plaese separate each IP with a space.
 This order is the same as that used in the node_list parameter.
 You have to configure PostgreSQL for permit a connection to this IP.
@@ -451,9 +451,9 @@ EOF
 
 #pgsql_start: Starts PostgreSQL
 pgsql_real_start() {
-    local rc
     local pgctl_options
     local postgres_options
+    local rc
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
@@ -510,7 +510,7 @@ pgsql_real_start() {
 	# Probably started.....
         ocf_log info "PostgreSQL start command sent."
     else
-	    ocf_log err "Cannot start PostgreSQL."
+	ocf_log err "Can't start PostgreSQL."
         return $OCF_ERR_GENERIC
     fi
 
@@ -680,8 +680,8 @@ pgsql_real_stop() {
             # An unnecessary debug log is prevented.
             break;
         fi
-    	sleep 1
-	    ocf_log debug "PostgreSQL still hasn't stopped yet. Waiting..."
+	sleep 1
+	ocf_log debug "PostgreSQL still hasn't stopped yet. Waiting..."
     done
 
     # Remove postmaster.pid if it exists
@@ -689,7 +689,6 @@ pgsql_real_stop() {
 
     return $OCF_SUCCESS
 }
-
 
 #pgsql_stop
 pgsql_stop() {
@@ -721,7 +720,6 @@ pgsql_stop() {
     return $OCF_SUCCESS
 }
 
-
 #
 # pgsql_status: is PostgreSQL up?
 #
@@ -743,9 +741,9 @@ pgsql_status() {
 #
 
 pgsql_real_monitor() {
-    local rc
     local loglevel
     local psql_options
+    local rc
     local output
 
     # Set the log level of the error message
@@ -783,7 +781,7 @@ pgsql_real_monitor() {
     fi
 
     if [ $rc -ne  0 ]; then
-        ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
+	ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
         if [ $rc -eq 1 ]; then
             ocf_log err "Fatal error (out of memory, file not found, etc.) occurred while executing the psql command."
         elif [ $rc -eq 2 ]; then
@@ -791,7 +789,7 @@ pgsql_real_monitor() {
         elif [ $rc -eq 3 ]; then
             ocf_log err "Script error (the variable ON_ERROR_STOP was set) occurred while executing the psql command."
         fi
-        return $OCF_ERR_GENERIC
+	return $OCF_ERR_GENERIC
     fi
 
     if is_replication; then
@@ -812,13 +810,7 @@ pgsql_real_monitor() {
 
 pgsql_monitor() {
     local rc
-    local masters
-    local rep_state
     local my_master_score
-    local rsc
-    local target
-    local node
-    local max_clone
 
     pgsql_real_monitor
     rc=$?
@@ -850,7 +842,7 @@ pgsql_monitor() {
         # If I am Slave and Master is exist
         my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
         if can_promote; then
-            if [ "$my_master_score" -le "0" ]; then  
+            if [ "$my_master_score" -le "0" ]; then
                 ocf_log info "PostgreSQL is changed to STREAMING mode."
                 $CRM_MASTER -v $CAN_PROMOTE
             fi
@@ -994,6 +986,11 @@ pgsql_notify() {
 }
 
 handle_sync_state() {
+    local rep_state
+    local rsc
+    local target
+    local instance
+
     if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
         return 0
     fi
@@ -1190,8 +1187,8 @@ delete_xlog_replay_location() {
 get_timeline_file() {
     local filesize
     local master
-    local timeline="-1"
-    local timeline_hex="-1"
+    local timeline
+    local timeline_hex
 
     if [ ! -n "$MASTER" ]; then
         ocf_log err "Master is not exist when getting timeline files."
@@ -1257,7 +1254,7 @@ can_promote() {
                 touch $REPRESS_PROMOTE
                 return 1
             fi
-        else 
+        else
             if [ "$rc" = "$STATE_STREAMING_ASYNC" ]; then
                 return 0
             fi
@@ -1365,7 +1362,7 @@ set_async_mode() {
     sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
         echo "1=$1, conf=$sync_node_in_conf" 1>&2
-        if ! echo $sync_node_in_conf | grep "$1"; then 
+        if ! echo $sync_node_in_conf | grep "$1"; then
             ocf_log info "$1 is already async mode."
         else
             ocf_log info "Setup $1 as a async mode."
