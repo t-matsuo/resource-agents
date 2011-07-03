@@ -316,7 +316,7 @@ Path to recovery.conf bakcup file.
 Used for replication.
 </longdesc>
 <shortdesc lang="en">recovery.conf</shortdesc>
-<content type="string" default="${OCF_RESKEY_recovery_conf_method_default}" />
+<content type="string" default="${OCF_RESKEY_recovery_conf_default}" />
 </parameter>
 
 <parameter name="ip_list" unique="0" required="0">
