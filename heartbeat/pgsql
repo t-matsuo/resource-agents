@@ -852,7 +852,10 @@ pgsql_monitor() {
                 ocf_log warn "PostgreSQL is disconnected to primary."
                 show_status "HS:alone"
             else
-                if [ "${my_master_score}" -gt "0" ]; then  
+                check_replication_state ${HOSTNAME}
+                if [ "$?" = "$STATE_STREAMING_POTENTIAL" ]; then
+                    show_status "HS:potential"
+                else
                     show_status "HS:connected"
                 fi
                 if ! touch $REPRESS_PROMOTE; then
@@ -1259,12 +1262,13 @@ show_replication_state() {
 
     oldinfo=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -G -q`
     if output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
-        ocf_log debug "replication state = $output"
         if [ ! -n "$output" ]; then
             output="none"
         fi
+        output=`echo $output | sed "s/\n/ /g"`
+        ocf_log debug "replication state = $output"
         if [ "$oldinfo" != "$output" ]; then
-            $CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -v $output
+            $CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -v "$output"
             return $?
         fi
         return 0
@@ -1296,6 +1300,7 @@ check_replication_state() {
         recognized_node=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 1`
         state=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 2`
         sync_state=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 3`
+        ocf_log debug "node=$recognized_node, state=$state, sync_state=$sync_state"
         if [ "$recognized_node" = "$1" ];then
             if [ "$state" = "STREAMING" ]; then
                 case "$sync_state" in
@@ -1398,7 +1403,7 @@ is_sync_mode() {
         ocf_log err "invalid args on is_sync_mode()"
         return 1
     fi
-    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2 | sed "s/,/ /g"`
     if [ -n "$sync_node_in_conf" ]; then
         for target in $sync_node_in_conf; do
             if [ "$target" = "$1" ];then
@@ -1568,7 +1573,7 @@ pgsql_validate_all() {
             if [ ! -n "$OCF_RESKEY_rep_mode_conf" ]; then
                 return $OCF_ERR_INSTALLED
             fi
-            if [ ! touch $OCF_RESKEY_rep_mode_conf ]; then
+            if ! touch $OCF_RESKEY_rep_mode_conf; then
                 ocf_log err "Can't create $OCF_RESKEY_rep_mode_conf"
                 return $OCF_ERR_INSTALLED
             fi
