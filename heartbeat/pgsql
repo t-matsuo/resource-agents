@@ -879,7 +879,7 @@ pgsql_monitor() {
 
                     ocf_log err "HS is disconnected. rsc=$rsc node=$OCF_RESKEY_node_list clone_max=$OCF_RESKEY_CRM_meta_clone_max"
                     for node in $OCF_RESKEY_node_list; do
-                        if [ "$node" = "$HA_CURHOST" ];then
+                        if [ "$node" = "$MY_HOSTNAME" ];then
                             continue
                         fi
                         ocf_log info "Failing $rsc on $node. Probably slave or LAN is dead."
@@ -924,7 +924,7 @@ pgsql_monitor() {
             show_status "HS:not streaming"
         fi
 
-        my_master_score=`crm_attribute -N ${HA_CURHOST} -n master-${OCF_RESOURCE_INSTANCE} -l reboot -G -q`
+        my_master_score=`crm_attribute -N ${MY_HOSTNAME} -n master-${OCF_RESOURCE_INSTANCE} -l reboot -G -q`
         if can_promote; then
             if [ "${my_master_score}" = "-INFINITY" ] || [ "${my_master_score}" -le "0" ]; then  
                 ocf_log info "PostgreSQL is changed to STREAMING mode."
@@ -991,7 +991,7 @@ is_master_right() {
     show_xlog_replay_location
     if [ "$?" != "0" ]; then
         ocf_log err "show_xlog_replay_location failed"
-        $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+        $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $MY_HOSTNAME -v INFINITY
     fi
 
     # get xlog replay locations of all nodes
@@ -1004,7 +1004,7 @@ is_master_right() {
         else
             ocf_log info "${node} xlog replay location is ${output}"
             echo "${node} ${output}" >> ${OCF_RESKEY_xlog_note}.${new}
-            if [ ${node} = ${HA_CURHOST} ]; then
+            if [ ${node} = ${MY_HOSTNAME} ]; then
                 mylocation=${output}
             fi
         fi
@@ -1017,7 +1017,7 @@ is_master_right() {
     if [ "${new}" = "$OCF_RESKEY_xlog_check_count" ]; then
        newestNode=`cat ${OCF_RESKEY_xlog_note}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 1`
        newestXlog=`cat ${OCF_RESKEY_xlog_note}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
-       if [ "$newestNode" = "$HA_CURHOST" ]; then
+       if [ "$newestNode" = "$MY_HOSTNAME" ]; then
            ocf_log info "I have master right."
            return 0
        fi
@@ -1078,19 +1078,19 @@ pgsql_post_promote() {
     ocf_log info "post-promote called.(master is ${OCF_RESKEY_CRM_meta_notify_promote_uname})"
 	delete_xlog_replay_location
 
-    if [ "${OCF_RESKEY_CRM_meta_notify_promote_uname}" = "${HA_CURHOST} " ]; then
+    if [ "${OCF_RESKEY_CRM_meta_notify_promote_uname}" = "${MY_HOSTNAME} " ]; then
         return $OCF_SUCCESS
     fi
 
     IS_CONNECT_TIMEOUT=`expr ${OCF_RESKEY_CRM_meta_timeout} / 1000 - 15`
     if [ "${IS_CONNECT_TIMEOUT}" -lt "2" ]; then
         ocf_log err "notify timeout is too small : < 18"
-        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${HA_CURHOST} -v INFINITY
+        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${MY_HOSTNAME} -v INFINITY
         return $OCF_ERR_GENERIC
     fi
     rm -f ${OCF_RESKEY_xlog_note}.*
     if ! get_timeline_file; then
-        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${HA_CURHOST} -v INFINITY
+        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${MY_HOSTNAME} -v INFINITY
         return $OCF_ERR_GENERIC
     fi
 
@@ -1101,7 +1101,7 @@ pgsql_post_promote() {
         if [ "${IS_CONNECT_TIMEOUT}" = "0" ]; then
             ocf_log err "Can not connect to primary on post_promote."
             show_status "HS:not connected."
-            ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${HA_CURHOST} -v INFINITY
+            ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${MY_HOSTNAME} -v INFINITY
             return $OCF_ERR_GENERIC
         fi
 
@@ -1130,10 +1130,10 @@ pgsql_post_demote() {
     IS_CONNECT_TIMEOUT=`expr ${OCF_RESKEY_CRM_meta_timeout} / 1000 - 15`
     if [ "$IS_CONNECT_TIMEOUT" -lt "2" ]; then
         ocf_log err "notify timeout is too small : < 18"
-        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${HA_CURHOST} -v INFINITY
+        ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${MY_HOSTNAME} -v INFINITY
     fi
 
-    if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${HA_CURHOST} " ]; then
+    if [ "${OCF_RESKEY_CRM_meta_notify_demote_uname}" = "${MY_HOSTNAME} " ]; then
         if [ -f ${REPRESS_PROMOTE} ]; then
             ocf_log warn "${REPRESS_PROMOTE} file is exist so I don't restart."
             return $OCF_SUCCESS
@@ -1158,7 +1158,7 @@ pgsql_post_demote() {
         if [ x"${OCF_RESKEY_CRM_meta_notify_master_uname}" != "x" ]; then
             if ! get_timeline_file; then
                 return $OCF_ERR_GENERIC
-                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HA_CURHOST -v INFINITY
+                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $MY_HOSTNAME -v INFINITY
             fi
 
             show_status "HS:connecting"
@@ -1167,7 +1167,7 @@ pgsql_post_demote() {
                 IS_CONNECT_TIMEOUT=`expr ${IS_CONNECT_TIMEOUT} - 1`
                 if [ "${IS_CONNECT_TIMEOUT}" = "0" ]; then
                     ocf_log err "Can not connect to primary on post_demote."
-                    ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${HA_CURHOST} -v INFINITY
+                    ${CRM_FAILCOUNT} -r ${OCF_RESOURCE_INSTANCE} -U ${MY_HOSTNAME} -v INFINITY
                     return $OCF_ERR_GENERIC
                 fi
 
@@ -1715,6 +1715,7 @@ PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 MASTER_IP="null"
 MY_IP="null"
+MY_HOSTNAME=`uname -n`
 
 STATE_STREAMING_ASYNC="1"
 STATE_STREAMING_SYNC="2"
