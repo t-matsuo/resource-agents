@@ -9,6 +9,7 @@
 # published by the Open Source Initiative.
 #
 
+%global rcver @rcver@
 %global alphatag @alphatag@
 %global numcomm @numcomm@
 %global dirty @dirty@
@@ -32,7 +33,7 @@
 Name:		resource-agents
 Summary:	Open Source HA Reusable Cluster Resource Scripts
 Version:	@version@
-Release:	1%{?numcomm:.%{numcomm}}%{?alphatag:.%{alphatag}}%{?dirty:.%{dirty}}%{?dist}
+Release:	@specver@%{?rcver:%{rcver}}%{?numcomm:.%{numcomm}}%{?alphatag:.%{alphatag}}%{?dirty:.%{dirty}}%{?dist}
 License:	GPLv2+ and LGPLv2+
 URL:		http://to.be.defined.com/
 %if 0%{?fedora} || 0%{?centos_version} || 0%{?rhel}
@@ -40,11 +41,41 @@ Group:		System Environment/Base
 %else
 Group:		Productivity/Clustering/HA
 %endif
-Source0:	%{name}-%{version}%{?numcomm:.%{numcomm}}%{?alphatag:-%{alphatag}}%{?dirty:-%{dirty}}.tar.bz2
+Source0:	%{name}-%{version}%{?rcver:%{rcver}}%{?numcomm:.%{numcomm}}%{?alphatag:-%{alphatag}}%{?dirty:-%{dirty}}.tar.bz2
 Obsoletes:	heartbeat-resources <= %{version}
 Provides:	heartbeat-resources = %{version}
 
+## Setup/build bits
+BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
+
+# Build dependencies
+BuildRequires: automake autoconf pkgconfig
+BuildRequires: perl python-devel
+BuildRequires: libxslt glib2-devel
+BuildRequires: which
+
+%if 0%{?fedora} || 0%{?centos_version} || 0%{?rhel}
+BuildRequires: cluster-glue-libs-devel
+BuildRequires: docbook-style-xsl docbook-dtds
+%if 0%{?rhel} == 0
+BuildRequires: libnet-devel
+%endif
+%endif
+
+%if 0%{?suse_version}  
+%if 0%{?suse_version} >= 1140
+BuildRequires:  libnet1
+%else
+BuildRequires:  libnet
+%endif
+BuildRequires:  libglue-devel
+BuildRequires:  libxslt docbook_4 docbook-xsl-stylesheets
+%endif
+
 ## Runtime deps
+## These apply to rgmanager agents only to guarantee agents
+## are functional
+%if %{with rgmanager}
 # system tools shared by several agents
 Requires: /bin/bash /bin/grep /bin/sed /bin/gawk
 Requires: /bin/ps /usr/bin/pkill /bin/hostname
@@ -67,6 +98,7 @@ Requires: /sbin/lvm
 # netfs.sh
 Requires: /sbin/mount.nfs /sbin/mount.nfs4 /sbin/mount.cifs
 Requires: /usr/sbin/rpc.nfsd /sbin/rpc.statd /usr/sbin/rpc.mountd
+%endif
 
 %description
 A set of scripts to interface with several services to operate in a
@@ -74,7 +106,6 @@ High Availability environment for both Pacemaker and rgmanager
 service managers.
 
 %if %{with linuxha}
-%if 0%{?rhel} == 0
 %package -n ldirectord
 License:	GPLv2+
 Summary:	A Monitoring Daemon for Maintaining High Availability Resources
@@ -104,37 +135,13 @@ lditrecord is simple to install and works with the heartbeat code
 
 See 'ldirectord -h' and linux-ha/doc/ldirectord for more information.
 %endif
-%endif
-
-## Setup/build bits
-BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
-
-# Build dependencies
-BuildRequires: automake autoconf pkgconfig
-BuildRequires: perl python-devel
-BuildRequires: libxslt glib2-devel
-BuildRequires: help2man which
-
-%if 0%{?fedora} || 0%{?centos_version} || 0%{?rhel}
-BuildRequires: cluster-glue-libs-devel
-BuildRequires: docbook-style-xsl docbook-dtds
-%if 0%{?rhel} == 0
-BuildRequires: libnet-devel
-%endif
-%endif
-
-%if 0%{?suse_version}  
-%if 0%{?suse_version} >= 1140
-BuildRequires:  libnet1
-%else
-BuildRequires:  libnet
-%endif
-BuildRequires:  libglue-devel
-BuildRequires:  libxslt docbook_4 docbook-xsl-stylesheets
-%endif
 
 %prep
-%setup -q -n %{name}-%{version}%{?numcomm:.%{numcomm}}%{?alphatag:-%{alphatag}}%{?dirty:-%{dirty}}
+%if 0%{?suse_version} == 0 && 0%{?fedora} == 0 && 0%{?centos_version} == 0 && 0%{?rhel} == 0
+%{error:Unable to determine the distribution/version. This is generally caused by missing /etc/rpm/macros.dist. Please install the correct build packages or define the required macros manually.}
+exit 1
+%endif
+%setup -q -n %{name}-%{version}%{?rcver:%{rcver}}%{?numcomm:.%{numcomm}}%{?alphatag:-%{alphatag}}%{?dirty:-%{dirty}}
 
 %build
 if [ ! -f configure ]; then
@@ -144,13 +151,10 @@ fi
 %if 0%{?fedora} >= 11 || 0%{?centos_version} > 5 || 0%{?rhel} > 5
 CFLAGS="$(echo '%{optflags}')"
 %global conf_opt_rsctmpdir "--with-rsctmpdir=%{_var}/run/heartbeat/rsctmp"
-%global jflags "%{_smp_mflags}"
 %global conf_opt_fatal "--enable-fatal-warnings=no"
 %else
 CFLAGS="${CFLAGS} ${RPM_OPT_FLAGS}"
-%global conf_opt_rsctmpdir ""
 %global conf_opt_fatal "--enable-fatal-warnings=yes"
-%global jflags "%{?jobs:-j%jobs}"
 %endif
 
 %if %{with rgmanager}
@@ -166,12 +170,18 @@ CFLAGS="${CFLAGS} ${RPM_OPT_FLAGS}"
 export CFLAGS
 
 %configure \
-	%{conf_opt_rsctmpdir} \
+	%{?conf_opt_rsctmpdir:%conf_opt_rsctmpdir} \
 	%{conf_opt_fatal} \
 	--with-pkg-name=%{name} \
 	--with-ras-set=%{rasset}
 
-make %{jflags}
+%if %{defined jobs}
+JFLAGS="$(echo '-j%{jobs}')"
+%else
+JFLAGS="$(echo '%{_smp_mflags}')"
+%endif
+
+make $JFLAGS
 
 %install
 rm -rf %{buildroot}
@@ -182,12 +192,6 @@ make install DESTDIR=%{buildroot}
 rm -rf %{buildroot}/usr/share/doc/resource-agents
 
 %if %{with linuxha}
-%if 0%{?rhel} != 0
-# ldirectord isn't included on RHEL
-find %{buildroot} -name 'ldirectord.*' -exec rm -f {} \;
-find %{buildroot} -name 'ldirectord' -exec rm -f {} \;
-%endif
-
 %if 0%{?suse_version}
 test -d %{buildroot}/sbin || mkdir %{buildroot}/sbin
 (
@@ -202,7 +206,7 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root)
-%doc AUTHORS COPYING COPYING.GPLv3 ChangeLog ChangeLog.devel
+%doc AUTHORS COPYING COPYING.GPLv3 ChangeLog
 %if %{with linuxha}
 %doc doc/README.webapps
 %doc %{_datadir}/%{name}/ra-api-1.dtd
@@ -210,6 +214,7 @@ rm -rf %{buildroot}
 
 %if %{with rgmanager}
 %{_datadir}/cluster
+%{_sbindir}/rhev-check.sh
 %endif
 
 %if %{with linuxha}
@@ -246,18 +251,14 @@ rm -rf %{buildroot}
 
 %{_mandir}/man7/*.7*
 %{_mandir}/man8/ocf-tester.8*
+%{_mandir}/man8/sfex_init.8*
 
 # For compatability with pre-existing agents
 %dir %{_sysconfdir}/ha.d
 %{_sysconfdir}/ha.d/shellfuncs
 
 %{_libdir}/heartbeat
-%{_libdir}/heartbeat/send_arp
-%{_libdir}/heartbeat/sfex_daemon
-%{_libdir}/heartbeat/findif
-%{_libdir}/heartbeat/tickle_tcp
 
-%if 0%{?rhel} == 0
 %if 0%{?suse_version}
 %preun -n ldirectord
 %stop_on_removal ldirectord
@@ -290,8 +291,7 @@ rm -rf %{buildroot}
 /usr/lib/ocf/resource.d/heartbeat/ldirectord
 %endif
 %endif
-%endif
 
 %changelog
-* @date@ Autotools generated version <nobody@nowhere.org> - @version@-1-@numcomm@.@alphatag@.@dirty@
+* @date@ Autotools generated version <nobody@nowhere.org> - @version@-@specver@-@numcomm@.@alphatag@.@dirty@
 - Autotools generated version

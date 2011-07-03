@@ -99,6 +99,7 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_db2.7 \
                           ocf_heartbeat_drbd.7 \
                           ocf_heartbeat_eDir88.7 \
+                          ocf_heartbeat_ethmonitor.7 \
                           ocf_heartbeat_exportfs.7 \
                           ocf_heartbeat_fio.7 \
                           ocf_heartbeat_iSCSILogicalUnit.7 \
@@ -106,6 +107,7 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_ids.7 \
                           ocf_heartbeat_iscsi.7 \
                           ocf_heartbeat_jboss.7 \
+                          ocf_heartbeat_lxc.7 \
                           ocf_heartbeat_mysql.7 \
                           ocf_heartbeat_mysql-proxy.7 \
                           ocf_heartbeat_nfsserver.7 \

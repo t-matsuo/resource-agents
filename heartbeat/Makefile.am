@@ -57,6 +57,7 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			eDir88			\
 			EvmsSCC			\
 			Evmsd			\
+			ethmonitor		\
 			exportfs		\
 			Filesystem		\
 			fio			\
@@ -69,6 +70,7 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			jboss			\
 			LinuxSCSI		\
 			LVM			\
+			lxc			\
 			MailTo			\
 			ManageRAID		\
 			ManageVE		\

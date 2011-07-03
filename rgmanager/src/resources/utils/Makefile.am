@@ -29,7 +29,10 @@ commonscripts		= fs-lib.sh \
 			  tomcat-parse-config.pl
 
 EXTRA_DIST		= $(commonscripts) \
-			  $(TARGET).in
+			  $(TARGET).in \
+			  rhev-check.sh
+
+sbin_SCRIPTS		= rhev-check.sh
 
 rasutilsdir		= ${CLUSTERDATA}/utils
 
