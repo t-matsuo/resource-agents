@@ -1021,7 +1021,7 @@ handle_sync_state() {
                             continue
                         fi
 
-                        ocf_log info "Repressing promote ${rsc}:{instance} on $target."
+                        ocf_log info "Repressing promote ${rsc}:{$instance} on $target."
                         $CRM_ATTR -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
                         if [ "$?" != "0" ]; then
                             return 1
