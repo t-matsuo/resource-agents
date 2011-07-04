@@ -68,7 +68,6 @@ OCF_RESKEY_restore_command_default="cp /var/lib/pgsql/data/pg_archive/%f %p"
 OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_rep_mode_conf_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.rep_mode.conf"
-OCF_RESKEY_show_status_default=no
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_xlog_note_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.xlog_note"
 OCF_RESKEY_xlog_check_count_default="3"
@@ -95,7 +94,6 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
 : ${OCF_RESKEY_rep_mode_conf=${OCF_RESKEY_rep_mode_conf_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
-: ${OCF_RESKEY_show_status=${OCF_RESKEY_show_status_default}}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_xlog_note=${OCF_RESKEY_xlog_note_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
@@ -331,15 +329,6 @@ This is optional for replication.
 </longdesc>
 <shortdesc lang="en">tmpdir</shortdesc>
 <content type="string" default="${OCF_RESKEY_tmpdir_default}" />
-</parameter>
-
-<parameter name="show_status" unique="0" required="0">
-<longdesc lang="en">
-Show pgsql status as a attribute. (yes/no(default))
-This is optional for replication.
-</longdesc>
-<shortdesc lang="en">show status</shortdesc>
-<content type="string" default="${OCF_RESKEY_show_status_default}" />
 </parameter>
 
 <parameter name="pgctldata" unique="0" required="0">
@@ -805,6 +794,7 @@ pgsql_real_monitor() {
 pgsql_monitor() {
     local rc
     local my_master_score
+    local my_status
 
     pgsql_real_monitor
     rc=$?
@@ -842,18 +832,24 @@ pgsql_monitor() {
             fi
             show_status "HS:streaming"
         else
+            my_status=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
             if ! is_connect; then
-                ocf_log warn "PostgreSQL is disconnected to primary."
-                show_status "HS:alone"
+                if [ "$my_status" != "HS:alone" ]; then
+                    ocf_log info "PostgreSQL is not connected to primary."
+                    show_status "HS:alone"
+                fi
             else
                 check_replication_state $HOSTNAME
                 if [ "$?" = "$STATE_STREAMING_POTENTIAL" ]; then
-                    show_status "HS:potential"
-                else
-                    show_status "HS:connected"
+                    if [ "$my_status" != "HS:potential" ]; then
+                        ocf_log info "PostgreSQL is changed to POTENTIAL mode."
+                        show_status "HS:potential"
+                    fi
+                elif [ "$my_status" != "HS:connected" ]; then
+                        ocf_log info "PostgreSQL is connected to primary."
+                        show_status "HS:connected"
                 fi
-                if ! touch $REPRESS_PROMOTE; then
-                    ocf_log err "Cannot create $REPRESS_PROMOTE"
+                if ! create_repress_promote_file; then
                     return $OCF_ERR_GENERIC
                 fi
                 $CRM_MASTER -v $CAN_NOT_PROMOTE
@@ -1056,8 +1052,7 @@ is_master_right() {
     my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
     if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
         ocf_log warn "My promote is repressed"
-        if ! touch $REPRESS_PROMOTE; then
-            ocf_log err "Cannot create $REPRESS_PROMOTE"
+        if ! create_repress_promote_file; then
             return 1
         fi
         return 1
@@ -1107,11 +1102,9 @@ is_master_right() {
            return 0
        fi
        ocf_log info "I don't have a master right."
-       if ! touch $REPRESS_PROMOTE; then
-            ocf_log err "Cannot create $REPRESS_PROMOTE"
+       if ! create_repress_promote_file; then
             return 1
        fi
-       ocf_log info "Created $REPRESS_PROMOTE"
     else
         oldfile=`cat ${OCF_RESKEY_xlog_note}.${old}`
         newfile=`cat ${OCF_RESKEY_xlog_note}.${new}`
@@ -1152,9 +1145,7 @@ is_replication() {
 }
 
 show_status() {
-    if [ "$OCF_RESKEY_show_status" = "yes" ]; then
-        $ATTRD_UPDATER -n $PGSQL_STATUS_ATTR -v "$1"
-    fi
+    $ATTRD_UPDATER -n $PGSQL_STATUS_ATTR -v "$1"
 }
 
 show_xlog_replay_location() {
@@ -1252,18 +1243,18 @@ can_promote() {
         rc=$?
         if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
             if [ "$rc" = "$STATE_STREAMING_SYNC" ]; then
-                rm -f $REPRESS_PROMOTE
+                delete_repress_promote_file
                 return 0
             else
-                touch $REPRESS_PROMOTE
+                create_repress_promote_file
                 return 1
             fi
         else
             if [ "$rc" = "$STATE_STREAMING_ASYNC" ]; then
-                rm -f $REPRESS_PROMOTE
+                delete_repress_promote_file
                 return 0
             else
-                touch $REPRESS_PROMOTE
+                create_repress_promote_file
                 return 1
             fi
         fi
@@ -1504,6 +1495,29 @@ END
     return 0
 }
 
+create_repress_promote_file() {
+    if [ -f $REPRESS_PROMOTE ]; then
+        return 0
+    fi
+    if ! touch $REPRESS_PROMOTE; then
+        ocf_log err "Cannot create $REPRESS_PROMOTE"
+        return 1
+    fi
+    ocf_log info "Created $REPRESS_PROMOTE"
+    return 0
+}
+
+delete_repress_promote_file() {
+    if [ ! -f $REPRESS_PROMOTE ]; then
+        return 0
+    fi
+    if rm -f $REPRESS_PROMOTE; then
+        ocf_log err "Cannot delete $REPRESS_PROMOTE"
+        return 1
+    fi
+    ocf_log info "Deleted $REPRESS_PROMOTE"
+    return 0
+}
 
 host_to_ip() {
     local host
