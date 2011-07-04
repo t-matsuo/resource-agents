@@ -1514,7 +1514,7 @@ delete_repress_promote_file() {
     if [ ! -f $REPRESS_PROMOTE ]; then
         return 0
     fi
-    if rm -f $REPRESS_PROMOTE; then
+    if ! rm -f $REPRESS_PROMOTE; then
         ocf_log err "Cannot delete $REPRESS_PROMOTE"
         return 1
     fi
