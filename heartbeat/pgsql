@@ -1022,7 +1022,7 @@ handle_sync_state() {
                         fi
 
                         ocf_log info "Repressing promote ${rsc}:{instance} on $target."
-                        $CRM_ATTR -N $target -n master-${rsc}:${instance} -v -INFINITY
+                        $CRM_ATTR -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
                         if [ "$?" != "0" ]; then
                             return 1
                         fi
@@ -1039,6 +1039,7 @@ handle_sync_state() {
 
 is_master_right() {
     local rc
+    local my_master_score
     local old
     local new
     local output
@@ -1050,6 +1051,15 @@ is_master_right() {
 
     if [ -f $REPRESS_PROMOTE ]; then
         ocf_log warn "$REPRESS_PROMOTE file is exist."
+        return 1
+    fi
+    my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+    if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
+        ocf_log warn "My promote is repressed"
+        if ! touch $REPRESS_PROMOTE; then
+            ocf_log err "Cannot create $REPRESS_PROMOTE"
+            return 1
+        fi
         return 1
     fi
 
@@ -1692,6 +1702,7 @@ CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 
 CAN_NOT_PROMOTE="-INFINITY"
+PROMOTE_REPRESSED="-100000"
 CAN_PROMOTE="100"
 PROMOTE_ME="1000"
 
