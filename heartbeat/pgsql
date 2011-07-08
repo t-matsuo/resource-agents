@@ -710,6 +710,7 @@ pgsql_stop() {
     fi
 
     show_status "STOP"
+    set_async_mode_all
     return $OCF_SUCCESS
 }
 
