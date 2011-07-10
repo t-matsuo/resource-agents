@@ -919,13 +919,6 @@ pgsql_post_demote() {
             return $OCF_ERR_GENERIC
         fi
         show_status "HS:alone"
-
-        if [ -n "$MASTER" ]; then
-            if ! get_timeline_file; then
-                return $OCF_ERR_GENERIC
-                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
-            fi
-        fi
         return $OCF_SUCCESS
     fi
 
