@@ -795,6 +795,7 @@ pgsql_monitor() {
     local rc
     local my_master_score
     local my_status
+    local rep_status
 
     pgsql_real_monitor
     rc=$?
@@ -817,46 +818,10 @@ pgsql_monitor() {
         return $rc
     fi
 
-
     # hmm... I can't get master name on monitor. It's bug ...
     # http://developerbugs.linux-foundation.org/show_bug.cgi?id=2607
-    # if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
     MASTER=`crm_mon -1 | grep "Masters: \[" | tr -s " " | cut -d " " -f 4`
-    if [ -n "$MASTER" ]; then
-        # If I am Slave and Master is exist
-        my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
-        if can_promote; then
-            if [ "$my_master_score" -le "0" ]; then
-                ocf_log info "PostgreSQL is changed to STREAMING mode."
-                $CRM_MASTER -v $CAN_PROMOTE
-            fi
-            show_status "HS:streaming"
-        else
-            my_status=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
-            if ! is_connect; then
-                if [ "$my_status" != "HS:alone" ]; then
-                    ocf_log info "PostgreSQL is not connected to primary."
-                    show_status "HS:alone"
-                fi
-            else
-                check_replication_state $HOSTNAME
-                if [ "$?" = "$STATE_STREAMING_POTENTIAL" ]; then
-                    if [ "$my_status" != "HS:potential" ]; then
-                        ocf_log info "PostgreSQL is changed to POTENTIAL mode."
-                        show_status "HS:potential"
-                    fi
-                elif [ "$my_status" != "HS:connected" ]; then
-                        ocf_log info "PostgreSQL is connected to primary."
-                        show_status "HS:connected"
-                fi
-                if ! create_repress_promote_file; then
-                    return $OCF_ERR_GENERIC
-                fi
-                $CRM_MASTER -v $CAN_NOT_PROMOTE
-            fi
-        fi
-        return $rc
-    else
+    if [ ! -n "$MASTER" ]; then
         # If I am Slave and Master is not exist
         ocf_log info "Master is not exist."
         show_status "HS:alone"
@@ -864,6 +829,75 @@ pgsql_monitor() {
         if [ "$?" = "0" ]; then
             $CRM_MASTER -v $PROMOTE_ME
             rm -f ${OCF_RESKEY_xlog_note}.$count
+        fi
+    else
+        # If I am Slave and Master is exist
+        my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+        my_status=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
+        check_replication_state $HOSTNAME
+        rep_status=$?
+
+        if [ "$rep_status" = "$STATE_NONE" ] || [ "$rep_status" = "$STATE_ERR" ]; then
+            show_status "HS:alone"
+            if [ "$my_status" != "HS:alone" ]; then
+                ocf_log info "PostgreSQL is not connected to primary."
+            fi
+            return $rc
+        elif [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+            case "$rep_status" in
+                $STATE_STREAMING_SYNC)
+                    delete_repress_promote_file || return $OCF_ERR_GENERIC
+                    show_status "HS:sync"
+                    if [ "$my_master_score" -le "0" ]; then
+                        ocf_log info "PostgreSQL is changed to SYNC mode."
+                        $CRM_MASTER -v $CAN_PROMOTE
+                    fi
+                    return $rc
+                    ;;
+               $STATE_STREAMING_POTENTIAL)
+                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    show_status "HS:potential"
+                    if [ "$my_status" != "HS:potential" ]; then
+                        ocf_log info "PostgreSQL is changed to POTENTIAL mode."
+                    fi
+                    ;;
+               $STATE_STREAMING_ASYNC)
+                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    show_status "HS:async"
+                    if [ "$my_status" != "HS:async" ]; then
+                        ocf_log info "PostgreSQL is changed to ASYNC mode."
+                    fi
+                    ;;
+                *)
+                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    show_status "HS:connected"
+                    if [ "$my_status" != "HS:connected" ]; then
+                        ocf_log info "PostgreSQL is connected to primary."
+                    fi
+                    ;;
+            esac
+        else
+             case "$rep_status" in
+                $STATE_STREAMING_ASYNC)
+                    delete_repress_promote_file
+                    show_status "HS:async"
+                    if [ "$my_master_score" -le "0" ]; then
+                        ocf_log info "PostgreSQL is changed to ASYNC mode."
+                        $CRM_MASTER -v $CAN_PROMOTE
+                    fi
+                    return $rc
+                    ;;
+                *)
+                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    show_status "HS:connected"
+                    if [ "$my_status" != "HS:connected" ]; then
+                        ocf_log info "PostgreSQL is connected to primary."
+                    fi
+                    ;;
+            esac
+        fi
+        if [ "$my_master_score" -ge "0" ]; then
+            $CRM_MASTER -v $CAN_NOT_PROMOTE
         fi
     fi
     return $rc
@@ -1112,24 +1146,6 @@ is_master_right() {
     return 1
 }
 
-is_connect() {
-    local rc
-
-    if [ -n "$MASTER" ]; then
-        check_replication_state $HOSTNAME
-        rc=$?
-        case ${rc} in
-            $STATE_NONE | $STATE_ERR)
-                return 1
-                ;;
-            *)
-                return 0
-                ;;
-        esac
-    fi
-    return 1
-}
-
 is_replication() {
     if [ "$OCF_RESKEY_rep_mode" != "none" ]; then
         return 0
@@ -1221,40 +1237,6 @@ get_timeline_file() {
     return 0
 }
 
-# This function is called by Slave
-# If rep_mode is async, we can promote when state is "STREAMING"
-# If rep_mode is sync, we can promote when state is "STREAMING" and sync_state is "SYNC"
-can_promote() {
-    local rc
-    local output
-    local my_hostname
-    local state
-    local sync_state
-
-    if [ -n "$MASTER" ]; then
-        check_replication_state $HOSTNAME
-        rc=$?
-        if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            if [ "$rc" = "$STATE_STREAMING_SYNC" ]; then
-                delete_repress_promote_file
-                return 0
-            else
-                create_repress_promote_file
-                return 1
-            fi
-        else
-            if [ "$rc" = "$STATE_STREAMING_ASYNC" ]; then
-                delete_repress_promote_file
-                return 0
-            else
-                create_repress_promote_file
-                return 1
-            fi
-        fi
-    fi
-    return 1
-}
-
 # Called by Master
 show_replication_state() {
     local output
@@ -1314,7 +1296,7 @@ check_replication_state() {
                             return $STATE_STREAMING_POTENTIAL
                             ;;
                     *)
-                            return $STATE_UNKNOWN
+                            return $STATE_STREAMING_UNKNOWN
                             ;;
                 esac
             else
@@ -1330,7 +1312,7 @@ check_replication_state() {
                             return $STATE_NOT_STREAMING_POTENTIAL
                             ;;
                     *)
-                            return $STATE_UNKNOWN
+                            return $STATE_NOT_STREAMING_UNKNOWN
                             ;;
                 esac
             fi
@@ -1730,12 +1712,13 @@ MASTER=""
 STATE_STREAMING_ASYNC="1"
 STATE_STREAMING_SYNC="2"
 STATE_STREAMING_POTENTIAL="3"
-STATE_NOT_STREAMING_ASYNC="4"
-STATE_NOT_STREAMING_SYNC="5"
-STATE_NOT_STREAMING_POTENTIAL="6"
-STATE_NONE="7"
-STATE_UNKNOWN="8"
-STATE_ERR="9"
+STATE_STREAMING_UNKNOWN="4"
+STATE_NOT_STREAMING_ASYNC="5"
+STATE_NOT_STREAMING_SYNC="6"
+STATE_NOT_STREAMING_POTENTIAL="7"
+STATE_NOT_STREAMING_UNKNOWN="8"
+STATE_NONE="9"
+STATE_ERR="10"
 
 # We can't get a master_uname correctly on monitor correctly :-<
 if [ "$OCF_RESKEY_CRM_meta_notify_master_uname" != " " ] && [ "$1" != "monitor" ]; then
