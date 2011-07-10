@@ -1318,7 +1318,7 @@ check_replication_state() {
                             ;;
                 esac
             else
-                ocf_log info "$1 is not STREAMING mode : $replication_state"
+                ocf_log info "$1 still has not not been STREAMING mode yet : $recognized_node|$state|$sync_state"
                 case "$sync_state" in
                     ASYNC)
                             return $STATE_NOT_STREAMING_ASYNC
