@@ -431,7 +431,7 @@ EOF
 }
 
 
-#pgsql_start: Starts PostgreSQL
+#pgsql_real_start: Starts PostgreSQL
 pgsql_real_start() {
     local pgctl_options
     local postgres_options
@@ -510,6 +510,7 @@ pgsql_real_start() {
     return $rc
 }
 
+#pgsql_start: pgsql_real_start() wrapper for replication
 pgsql_start() {
     local rc
 
@@ -551,9 +552,7 @@ pgsql_start() {
     return $rc
 }
 
-#
-# promote operation
-#
+#pgsql_promote: Promote PostgreSQL
 pgsql_promote() {
     local rc
 
@@ -587,9 +586,7 @@ pgsql_promote() {
     return $OCF_SUCCESS
 }
 
-#
-# demote operation
-#
+#pgsql_demote: Demote PostgreSQL
 pgsql_demote() {
     local rc
 
@@ -620,7 +617,7 @@ pgsql_demote() {
     return $OCF_SUCCESS
 }
 
-#pgsql_stop: Stop PostgreSQL
+#pgsql_real_stop: Stop PostgreSQL
 pgsql_real_stop() {
     local rc
     local count
@@ -672,7 +669,7 @@ pgsql_real_stop() {
     return $OCF_SUCCESS
 }
 
-#pgsql_stop
+#pgsql_stop: pgsql_real_stop() wrapper for replication
 pgsql_stop() {
     local rc
 
@@ -720,7 +717,7 @@ pgsql_status() {
 }
 
 #
-# pgsql_monitor
+# pgsql_real_monitor
 #
 
 pgsql_real_monitor() {
@@ -791,6 +788,7 @@ pgsql_real_monitor() {
     return $OCF_SUCCESS
 }
 
+#pgsql_stop: pgsql_real_monitor() wrapper for replication
 pgsql_monitor() {
     local rc
     local my_master_score
@@ -903,6 +901,7 @@ pgsql_monitor() {
     return $rc
 }
 
+#pgsql_post_promote: prepare connectiong primary
 pgsql_post_promote() {
     ocf_log debug "post-promote called.(Master is $MASTER)"
 	delete_xlog_replay_location
@@ -921,6 +920,7 @@ pgsql_post_promote() {
     return $OCF_SUCCESS
 }
 
+#pgsql_post_demote: start PostgreSQL to transit from master to slave
 pgsql_post_demote() {
     local my_fail_count
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
@@ -1259,7 +1259,7 @@ show_replication_state() {
     fi
 }
 
-# This function is called by Master when rep_mode=sync
+# Called by Master when rep_mode=sync
 check_replication_state() {
     local rc
     local index
