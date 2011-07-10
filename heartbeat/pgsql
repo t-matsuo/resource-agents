@@ -1214,7 +1214,7 @@ get_timeline_file() {
     do
         # increment timeline ID
         timeline_hex=`perl -e "\\$num = hex \"${timeline_hex}\"; printf \"\%08X\",++\\$num"`
-        ocf_log info "Searching ${timeline_hex}.history file."
+        ocf_log debug "Searching ${timeline_hex}.history file."
 
         # get timeline id file size
         filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc "SELECT pg_stat_file('pg_xlog/${timeline_hex}.history')" 2>/dev/null`
