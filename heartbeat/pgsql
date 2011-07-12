@@ -1226,7 +1226,7 @@ get_timeline_file() {
         ocf_log debug "Searching ${timeline_hex}.history file."
 
         # get timeline id file size
-        filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc "SELECT pg_stat_file('pg_xlog/${timeline_hex}.history')" 2>/dev/null`
+        filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc "select pg_stat_file('pg_xlog/${timeline_hex}.history')" 2>/dev/null`
         if [ "$?" != "0" ]; then
              ocf_log info "Timeline file ${timeline_hex}.history is not exist."
              break
@@ -1235,7 +1235,7 @@ get_timeline_file() {
         ocf_log info "Find ${timeline_hex}.history file. Size is $filesize. Getting..."
 
         # get timeline id file
-        su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc \"SELECT pg_read_file('pg_xlog/${timeline_hex}.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/${timeline_hex}.history 2>&1"
+        su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc \"select pg_read_file('pg_xlog/${timeline_hex}.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/${timeline_hex}.history 2>&1"
         if [ "$?" != 0 ]; then
              ocf_log err "Cannot get ${timeline_hex}.history file."
              return 1
@@ -1709,7 +1709,7 @@ PROMOTE_ME="1000"
 
 CHECK_MS_SQL="select pg_is_in_recovery();"
 CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
-CHECK_REPLICATION_STATE_SQL="SELECT application_name,state,sync_state from pg_stat_replication"
+CHECK_REPLICATION_STATE_SQL="selectT application_name,state,sync_state from pg_stat_replication"
 
 PGSQL_STATUS_ATTR="pgsql-status"
 PGSQL_REP_ATTR="pgsql-rep-status"
