@@ -678,6 +678,14 @@ pgsql_stop() {
         return $?
     fi
 
+    my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+    if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
+        ocf_log warn "My promote is repressed"
+        if ! create_repress_promote_file; then
+            return 1
+        fi
+    fi
+
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     delete_xlog_replay_location
 
