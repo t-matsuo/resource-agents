@@ -1716,7 +1716,7 @@ CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_st
 
 PGSQL_STATUS_ATTR="pgsql-status"
 PGSQL_REP_ATTR="pgsql-rep-status"
-PGSQL_REPRESSED_ATTR="pgsql-promote-status"
+PGSQL_REPRESSED_ATTR="pgsql-data-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
 HOSTNAME=`uname -n`
