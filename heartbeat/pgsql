@@ -1709,7 +1709,7 @@ PROMOTE_ME="1000"
 
 CHECK_MS_SQL="select pg_is_in_recovery();"
 CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
-CHECK_REPLICATION_STATE_SQL="selectT application_name,state,sync_state from pg_stat_replication"
+CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_stat_replication"
 
 PGSQL_STATUS_ATTR="pgsql-status"
 PGSQL_REP_ATTR="pgsql-rep-status"
