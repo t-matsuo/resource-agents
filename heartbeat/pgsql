@@ -1055,6 +1055,7 @@ handle_sync_state() {
                         ocf_log info "Repressing promote ${rsc}:{$instance} on $target."
                         $CRM_ATTR -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
                         if [ "$?" != "0" ]; then
+                            ocf_log err "Cannot repress promote ${rsc}:{$instance} on $target."
                             return 1
                         fi
                         instance=`expr $instance + 1`
