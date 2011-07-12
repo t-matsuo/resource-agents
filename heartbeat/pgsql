@@ -555,6 +555,7 @@ pgsql_start() {
 #pgsql_promote: Promote PostgreSQL
 pgsql_promote() {
     local rc
+    local output
 
     if ! is_replication; then
         ocf_log err "It's not replication mode."
@@ -562,8 +563,9 @@ pgsql_promote() {
     fi
 
     rm -f ${OCF_RESKEY_xlog_note}.*
-    if [ -f $REPRESS_PROMOTE ]; then
-        ocf_log warn "${REPRESS_PROMOTE} file is exist"
+    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$output" = "repressed" ]; then
+        ocf_log warn "Promote is repressed."
         return $OCF_ERR_GENERIC
     fi
 
@@ -596,7 +598,7 @@ pgsql_demote() {
     fi
 
     $CRM_MASTER -v $CAN_NOT_PROMOTE
-    $CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -D
+    $CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -D
 
     if ! pgsql_status
     then
@@ -678,10 +680,10 @@ pgsql_stop() {
         return $?
     fi
 
-    my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+    my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
     if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
         ocf_log warn "My promote is repressed"
-        if ! create_repress_promote_file; then
+        if ! create_repress_promote; then
             return 1
         fi
     fi
@@ -838,8 +840,8 @@ pgsql_monitor() {
         fi
     else
         # If I am Slave and Master is exist
-        my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
-        my_status=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
+        my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+        my_status=`$CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
         check_replication_state $HOSTNAME
         rep_status=$?
 
@@ -852,7 +854,7 @@ pgsql_monitor() {
         elif [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
             case "$rep_status" in
                 $STATE_STREAMING_SYNC)
-                    delete_repress_promote_file || return $OCF_ERR_GENERIC
+                    delete_repress_promote || return $OCF_ERR_GENERIC
                     show_status "HS:sync"
                     if [ "$my_master_score" -le "0" ]; then
                         ocf_log info "PostgreSQL is changed to SYNC mode."
@@ -861,21 +863,21 @@ pgsql_monitor() {
                     return $rc
                     ;;
                $STATE_STREAMING_POTENTIAL)
-                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    create_repress_promote || return $OCF_ERR_GENERIC
                     show_status "HS:potential"
                     if [ "$my_status" != "HS:potential" ]; then
                         ocf_log info "PostgreSQL is changed to POTENTIAL mode."
                     fi
                     ;;
                $STATE_STREAMING_ASYNC)
-                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    create_repress_promote || return $OCF_ERR_GENERIC
                     show_status "HS:async"
                     if [ "$my_status" != "HS:async" ]; then
                         ocf_log info "PostgreSQL is changed to ASYNC mode."
                     fi
                     ;;
                 *)
-                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    create_repress_promote || return $OCF_ERR_GENERIC
                     show_status "HS:connected"
                     if [ "$my_status" != "HS:connected" ]; then
                         ocf_log info "PostgreSQL is connected to primary."
@@ -885,7 +887,7 @@ pgsql_monitor() {
         else
              case "$rep_status" in
                 $STATE_STREAMING_ASYNC)
-                    delete_repress_promote_file
+                    delete_repress_promote
                     show_status "HS:async"
                     if [ "$my_master_score" -le "0" ]; then
                         ocf_log info "PostgreSQL is changed to ASYNC mode."
@@ -894,7 +896,7 @@ pgsql_monitor() {
                     return $rc
                     ;;
                 *)
-                    create_repress_promote_file || return $OCF_ERR_GENERIC
+                    create_repress_promote || return $OCF_ERR_GENERIC
                     show_status "HS:connected"
                     if [ "$my_status" != "HS:connected" ]; then
                         ocf_log info "PostgreSQL is connected to primary."
@@ -931,14 +933,17 @@ pgsql_post_promote() {
 #pgsql_post_demote: start PostgreSQL to transit from master to slave
 pgsql_post_demote() {
     local my_fail_count
+    local output
+
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
     ocf_log debug "post-demote called.(Demote uname is $DEMOTE_NODE)"
 
     # I start pgsql on post_demote()
     # because if it's failed starting pgsql on demote, node is fenced.
     if [ "$DEMOTE_NODE" = "$HOSTNAME" ]; then
-        if [ -f "$REPRESS_PROMOTE" ]; then
-            ocf_log warn "$REPRESS_PROMOTE file is exist so I don't start PotgreSQL on post-demote."
+        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+        if [ "$output" = "repressed" ]; then
+            ocf_log warn "Promote is prepressed so I don't start PotgreSQL on post-demote."
             return $OCF_SUCCESS
         fi
 
@@ -1053,7 +1058,7 @@ handle_sync_state() {
                         fi
 
                         ocf_log info "Repressing promote ${rsc}:${instance} on $target."
-                        $CRM_ATTR -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
+                        $CRM_ATTR_REBOOT -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
                         if [ "$?" != "0" ]; then
                             ocf_log err "Cannot repress promote ${rsc}:{$instance} on $target."
                             return 1
@@ -1081,14 +1086,15 @@ is_master_right() {
 
     ocf_log debug "Checking right of master."
 
-    if [ -f $REPRESS_PROMOTE ]; then
-        ocf_log warn "$REPRESS_PROMOTE file is exist."
+    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$output" = "repressed" ]; then
+        ocf_log warn "Promote is repressed."
         return 1
     fi
-    my_master_score=`$CRM_ATTR -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
+    my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
     if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
         ocf_log warn "My promote is repressed"
-        if ! create_repress_promote_file; then
+        if ! create_repress_promote; then
             return 1
         fi
         return 1
@@ -1113,7 +1119,7 @@ is_master_right() {
 
     # get xlog replay locations of all nodes
     for node in ${OCF_RESKEY_node_list}; do
-        output=`$CRM_ATTR --type nodes -N $node --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
+        output=`$CRM_ATTR_REBOOT --type nodes -N $node --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
         rc=$?
         if [ "$rc" != "0" ]; then
             ocf_log warn "Cannot get $node xlog replay location."
@@ -1138,7 +1144,7 @@ is_master_right() {
            return 0
        fi
        ocf_log info "I don't have a master right."
-       if ! create_repress_promote_file; then
+       if ! create_repress_promote; then
             return 1
        fi
     else
@@ -1188,12 +1194,12 @@ show_xlog_replay_location() {
     ocf_log info "My xlog replay location : ${log1}/${log2}"
     echo "${log1}${log2}"
 
-    $CRM_ATTR --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
+    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
     return $?
 }
 
 delete_xlog_replay_location() {
-    $CRM_ATTR --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
     return $?
 }
 
@@ -1251,7 +1257,7 @@ show_replication_state() {
     local output
     local oldinfo
 
-    oldinfo=`$CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
+    oldinfo=`$CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
     if output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
         if [ ! -n "$output" ]; then
             output="none"
@@ -1259,7 +1265,7 @@ show_replication_state() {
         output=`echo $output | sed "s/\n/ /g"`
         ocf_log debug "replication state=$output"
         if [ "$oldinfo" != "$output" ]; then
-            $CRM_ATTR -N $HOSTNAME -n $PGSQL_REP_ATTR -v "$output"
+            $CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -v "$output"
             return $?
         fi
         return 0
@@ -1281,7 +1287,7 @@ check_replication_state() {
         return $STATE_ERR
     fi
 
-    replication_state=`$CRM_ATTR -N $MASTER -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
+    replication_state=`$CRM_ATTR_REBOOT -N $MASTER -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
     if [ "$replication_state" = "none" ]; then
         return $STATE_NONE
     fi
@@ -1482,28 +1488,25 @@ END
     return 0
 }
 
-create_repress_promote_file() {
-    if [ -f $REPRESS_PROMOTE ]; then
-        return 0
+create_repress_promote() {
+    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$output" != "repressed" ]; then
+        $CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "repressed"
     fi
-    if ! touch $REPRESS_PROMOTE; then
-        ocf_log err "Cannot create $REPRESS_PROMOTE"
-        return 1
-    fi
-    ocf_log info "Created $REPRESS_PROMOTE"
     return 0
 }
 
-delete_repress_promote_file() {
-    if [ ! -f $REPRESS_PROMOTE ]; then
-        return 0
+delete_repress_promote() {
+    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$output" != "none" ]; then
+        $CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "none"
     fi
-    if ! rm -f $REPRESS_PROMOTE; then
-        ocf_log err "Cannot delete $REPRESS_PROMOTE"
-        return 1
-    fi
-    ocf_log info "Deleted $REPRESS_PROMOTE"
     return 0
+}
+
+get_repress_promote() {
+    local output
+    output=`$CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
 }
 
 host_to_ip() {
@@ -1695,10 +1698,10 @@ BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 
 if is_replication; then
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
-REPRESS_PROMOTE=${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.repress_promote
 
 CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
-CRM_ATTR="${HA_SBIN_DIR}/crm_attribute -l reboot"
+CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
+CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
 CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 
@@ -1713,6 +1716,7 @@ CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_st
 
 PGSQL_STATUS_ATTR="pgsql-status"
 PGSQL_REP_ATTR="pgsql-rep-status"
+PGSQL_REPRESSED_ATTR="pgsql-promote-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
 HOSTNAME=`uname -n`
