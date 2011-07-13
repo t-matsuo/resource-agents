@@ -520,7 +520,7 @@ pgsql_start() {
     fi
 
     # initializing for replication
-    show_status "STOP"
+    change_pgsql_status $HOSTNAME "STOP"
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${OCF_RESKEY_xlog_note}*
     if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
@@ -533,7 +533,7 @@ pgsql_start() {
 
     case "$rc" in
         $OCF_SUCCESS)
-            show_status "HS:alone"
+            change_pgsql_status $HOSTNAME "HS:alone"
             ;;
         *)
             ocf_log warn "PostgreSQL has not started as a hot standby."
@@ -561,14 +561,9 @@ pgsql_promote() {
         ocf_log err "It's not replication mode."
         return $OCF_ERR_CONFIGURED
     fi
-
     rm -f ${OCF_RESKEY_xlog_note}.*
-    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
-    if [ "$output" = "repressed" ]; then
-        ocf_log warn "Promote is repressed."
-        return $OCF_ERR_GENERIC
-    fi
 
+    handle_sync_mode_and_master_score
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
     while :
     do
@@ -581,9 +576,10 @@ pgsql_promote() {
         ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
     done
     ocf_log info "PostgreSQL is promoted."
-    show_status "PRI"
+    change_pgsql_status $HOSTNAME "PRI"
     $CRM_MASTER -v $PROMOTE_ME
-    show_replication_state
+    handle_sync_mode_and_master_score
+    change_data_status $HOSTNAME "LATEST"
 
     return $OCF_SUCCESS
 }
@@ -598,12 +594,11 @@ pgsql_demote() {
     fi
 
     $CRM_MASTER -v $CAN_NOT_PROMOTE
-    $CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -D
 
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
-        show_status "STOP"
+        change_pgsql_status $HOSTNAME "STOP"
         return $OCF_SUCCESS
     fi
 
@@ -611,10 +606,10 @@ pgsql_demote() {
     pgsql_real_stop
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
-        show_status "UNKNOWN"
+        change_pgsql_status $HOSTNAME "UNKNOWN"
         return $rc
     fi
-    show_status "STOP"
+    change_pgsql_status $HOSTNAME "STOP"
     set_async_mode_all
     return $OCF_SUCCESS
 }
@@ -680,32 +675,24 @@ pgsql_stop() {
         return $?
     fi
 
-    my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
-    if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
-        ocf_log warn "My promote is repressed"
-        if ! create_repress_promote; then
-            return 1
-        fi
-    fi
-
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     delete_xlog_replay_location
 
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
-        show_status "STOP"
+        change_pgsql_status $HOSTNAME "STOP"
         return $OCF_SUCCESS
     fi
 
     pgsql_real_stop
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
-        show_status "UNKNOWN"
+        change_pgsql_status $HOSTNAME "UNKNOWN"
         return $rc
     fi
 
-    show_status "STOP"
+    change_pgsql_status $HOSTNAME "STOP"
     set_async_mode_all
     return $OCF_SUCCESS
 }
@@ -801,7 +788,6 @@ pgsql_real_monitor() {
 #pgsql_stop: pgsql_real_monitor() wrapper for replication
 pgsql_monitor() {
     local rc
-    local my_master_score
     local my_status
     local rep_status
 
@@ -818,9 +804,9 @@ pgsql_monitor() {
     # If I am Master
     if [ "$rc" = "$OCF_RUNNING_MASTER" ]; then
         MASTER=$HOSTNAME
-        show_replication_state
-        show_status "PRI"
-        if ! handle_sync_state; then
+        change_data_status $HOSTNAME "LATEST"
+        change_pgsql_status $HOSTNAME "PRI"
+        if ! handle_sync_mode_and_master_score; then
             return $OCF_ERR_GENERIC
         fi
         return $rc
@@ -832,80 +818,15 @@ pgsql_monitor() {
     if [ ! -n "$MASTER" ]; then
         # If I am Slave and Master is not exist
         ocf_log info "Master is not exist."
-        show_status "HS:alone"
+        change_pgsql_status $HOSTNAME "HS:alone"
         is_master_right
         if [ "$?" = "0" ]; then
-            $CRM_MASTER -v $PROMOTE_ME
             rm -f ${OCF_RESKEY_xlog_note}.$count
         fi
     else
-        # If I am Slave and Master is exist
-        my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
-        my_status=`$CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_STATUS_ATTR -G -q`
-        check_replication_state $HOSTNAME
-        rep_status=$?
-
-        if [ "$rep_status" = "$STATE_NONE" ] || [ "$rep_status" = "$STATE_ERR" ]; then
-            show_status "HS:alone"
-            if [ "$my_status" != "HS:alone" ]; then
-                ocf_log info "PostgreSQL is not connected to primary."
-            fi
-            return $rc
-        elif [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            case "$rep_status" in
-                $STATE_STREAMING_SYNC)
-                    delete_repress_promote || return $OCF_ERR_GENERIC
-                    show_status "HS:sync"
-                    if [ "$my_master_score" -le "0" ]; then
-                        ocf_log info "PostgreSQL is changed to SYNC mode."
-                        $CRM_MASTER -v $CAN_PROMOTE
-                    fi
-                    return $rc
-                    ;;
-               $STATE_STREAMING_POTENTIAL)
-                    create_repress_promote || return $OCF_ERR_GENERIC
-                    show_status "HS:potential"
-                    if [ "$my_status" != "HS:potential" ]; then
-                        ocf_log info "PostgreSQL is changed to POTENTIAL mode."
-                    fi
-                    ;;
-               $STATE_STREAMING_ASYNC)
-                    create_repress_promote || return $OCF_ERR_GENERIC
-                    show_status "HS:async"
-                    if [ "$my_status" != "HS:async" ]; then
-                        ocf_log info "PostgreSQL is changed to ASYNC mode."
-                    fi
-                    ;;
-                *)
-                    create_repress_promote || return $OCF_ERR_GENERIC
-                    show_status "HS:connected"
-                    if [ "$my_status" != "HS:connected" ]; then
-                        ocf_log info "PostgreSQL is connected to primary."
-                    fi
-                    ;;
-            esac
-        else
-             case "$rep_status" in
-                $STATE_STREAMING_ASYNC)
-                    delete_repress_promote
-                    show_status "HS:async"
-                    if [ "$my_master_score" -le "0" ]; then
-                        ocf_log info "PostgreSQL is changed to ASYNC mode."
-                        $CRM_MASTER -v $CAN_PROMOTE
-                    fi
-                    return $rc
-                    ;;
-                *)
-                    create_repress_promote || return $OCF_ERR_GENERIC
-                    show_status "HS:connected"
-                    if [ "$my_status" != "HS:connected" ]; then
-                        ocf_log info "PostgreSQL is connected to primary."
-                    fi
-                    ;;
-            esac
-        fi
-        if [ "$my_master_score" -ge "0" ]; then
-            $CRM_MASTER -v $CAN_NOT_PROMOTE
+        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+        if [ "$output" = "DISCONNECT" ]; then
+            change_pgsql_status $HOSTNAME "HS:alone"
         fi
     fi
     return $rc
@@ -917,7 +838,7 @@ pgsql_post_promote() {
 	delete_xlog_replay_location
 
     if [ "$MASTER" = "$HOSTNAME" ]; then
-        show_replication_state
+        handle_sync_mode_and_master_score
         return $OCF_SUCCESS
     fi
 
@@ -941,12 +862,6 @@ pgsql_post_demote() {
     # I start pgsql on post_demote()
     # because if it's failed starting pgsql on demote, node is fenced.
     if [ "$DEMOTE_NODE" = "$HOSTNAME" ]; then
-        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
-        if [ "$output" = "repressed" ]; then
-            ocf_log warn "Promote is prepressed so I don't start PotgreSQL on post-demote."
-            return $OCF_SUCCESS
-        fi
-
         my_fail_count=`$CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -N $HOSTNAME -G -Q | sed "s/INFINITY/1000000/g"`
         if [ "$my_fail_count" != "0" ]; then
             ocf_log info "My fail-count=$my_fail_count, so I don't start on post-demote."
@@ -965,11 +880,11 @@ pgsql_post_demote() {
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
             return $OCF_ERR_GENERIC
         fi
-        show_status "HS:alone"
+        change_pgsql_status $HOSTNAME "HS:alone"
         return $OCF_SUCCESS
     fi
 
-    show_status "HS:alone"
+    change_pgsql_status $HOSTNAME "HS:alone"
     return $OCF_SUCCESS
 }
 
@@ -993,8 +908,7 @@ pgsql_notify() {
                     ;;
                 start|stop)
                     if [ "$HOSTNAME" = "$MASTER" ]; then
-                        show_replication_state
-                        handle_sync_state
+                        handle_sync_mode_and_master_score
                     fi
                     return $OCF_SUCCESS
                     ;;
@@ -1004,9 +918,9 @@ pgsql_notify() {
             case $op in
                 promote)
                     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
-                    if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
-                        $CRM_MASTER -v $CAN_NOT_PROMOTE
-                    fi
+#                    if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
+#                        $CRM_MASTER -v $CAN_NOT_PROMOTE
+#                    fi
                     return $OCF_SUCCESS
                     ;;
             esac
@@ -1015,59 +929,53 @@ pgsql_notify() {
     return $OCF_SUCCESS
 }
 
-handle_sync_state() {
+handle_sync_mode_and_master_score() {
     local rep_state
-    local rsc
     local target
-    local instance
-
-    if [ "$OCF_RESKEY_rep_mode" != "sync" ]; then
-        return 0
-    fi
 
     for target in $OCF_RESKEY_node_list; do
         if [ "$target" = "$HOSTNAME" ]; then
             continue
         fi
-
-        check_replication_state $target
-        rep_state=$?
-
-        case $rep_state in
-            $STATE_STREAMING_SYNC)
+        rep_state=`check_replication_state $target`
+        case "$rep_state" in
+            "STREAMING|SYNC")
+                change_data_status "$target" "$rep_state"
+                change_master_score "$target" $CAN_PROMOTE
+                change_pgsql_status "$target" "HS:sync"
                 ;;
-            $STATE_STREAMING_ASYNC)
-                set_sync_mode ${target}
-                show_replication_state
+            "STREAMING|ASYNC")
+                change_data_status "$target" "$rep_state"
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+                    change_master_score "$target" $CAN_NOT_PROMOTE
+                    if ! is_sync_mode $target; then
+                        set_sync_mode $target
+                    fi
+                else
+                    change_data_status "$target" "$rep_state"
+                    change_master_score "$target" $CAN_PROMOTE
+                fi
+                change_pgsql_status "$target" "HS:async"
                 ;;
-            $STATE_STREAMING_POTENTIAL)
+            "STREAMING|POTENTIAL")
+                change_data_status "$target" "$rep_state"
+                change_master_score "$target" $CAN_NOT_PROMOTE
+                change_pgsql_status "$target" "HS:potential"
+                ;;
+            "DISCONNECT")
+                change_data_status "$target" "$rep_state"
+                change_master_score "$target" $CAN_NOT_PROMOTE
+                if is_sync_mode $target; then
+                    set_async_mode $target
+                fi
                 ;;
             *)
+                change_data_status "$target" "$rep_state"
+                change_master_score "$target" $CAN_NOT_PROMOTE
                 if is_sync_mode $target; then
-                    rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
-                    ocf_log warn "$target is disconnected."
-                    instance=0
-                    while :
-                    do
-                        if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
-                            break
-                        fi
-                        if [ "${rsc}:${instance}" = "$OCF_RESOURCE_INSTANCE" ]; then
-                            instance=`expr $instance + 1`
-                            continue
-                        fi
-
-                        ocf_log info "Repressing promote ${rsc}:${instance} on $target."
-                        $CRM_ATTR_REBOOT -N $target -n master-${rsc}:${instance} -v $PROMOTE_REPRESSED
-                        if [ "$?" != "0" ]; then
-                            ocf_log err "Cannot repress promote ${rsc}:{$instance} on $target."
-                            return 1
-                        fi
-                        instance=`expr $instance + 1`
-                    done
                     set_async_mode $target
-                    show_replication_state
                 fi
+                change_pgsql_status "$target" "HS:connected"
                 ;;
         esac
     done
@@ -1076,29 +984,32 @@ handle_sync_state() {
 
 is_master_right() {
     local rc
-    local my_master_score
     local old
     local new
     local output
+    local data_status
     local node
     local mylocation
     local count
+    local newestXlog
+    local oldfile
+    local newfile
 
     ocf_log debug "Checking right of master."
 
-    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
-    if [ "$output" = "repressed" ]; then
-        ocf_log warn "Promote is repressed."
-        return 1
-    fi
-    my_master_score=`$CRM_ATTR_REBOOT -N $HOSTNAME -n master-${OCF_RESOURCE_INSTANCE} -G -q 2>/dev/null | sed "s/INFINITY/1000000/g"`
-    if [ ! -n "$my_master_score" ] || [ "$my_master_score" = "$PROMOTE_REPRESSED" ]; then
-        ocf_log warn "My promote is repressed"
-        if ! create_repress_promote; then
+    data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "LATEST" ]; then
+            ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
-        return 1
+    else
+        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "STREAMING|ASYNC" ] && [ "$data_status" != "LATEST" ]; then
+            ocf_log warn "My data is out-of-date. status=$data_status"
+            return 1
+        fi
     fi
+    ocf_log info "My data status=$data_status."
 
     old=1
     new=1
@@ -1141,12 +1052,15 @@ is_master_right() {
        newestXlog=`cat ${OCF_RESKEY_xlog_note}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
        if [ "$newestXlog" = "$mylocation" ]; then
            ocf_log info "I have a master right."
+           if [ "$data_status" = "LATEST" ]; then
+               $CRM_MASTER -v $PROMOTE_ME
+           else
+               $CRM_MASTER -v $CAN_PROMOTE
+           fi
            return 0
        fi
        ocf_log info "I don't have a master right."
-       if ! create_repress_promote; then
-            return 1
-       fi
+       change_data_state $HOSTNAME "out-of-date" 
     else
         oldfile=`cat ${OCF_RESKEY_xlog_note}.${old}`
         newfile=`cat ${OCF_RESKEY_xlog_note}.${new}`
@@ -1166,10 +1080,6 @@ is_replication() {
         return 0
     fi
     return 1
-}
-
-show_status() {
-    $ATTRD_UPDATER -n $PGSQL_STATUS_ATTR -v "$1"
 }
 
 show_xlog_replay_location() {
@@ -1253,87 +1163,41 @@ get_timeline_file() {
 }
 
 # Called by Master
-show_replication_state() {
-    local output
-    local oldinfo
-
-    oldinfo=`$CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
-    if output=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
-        if [ ! -n "$output" ]; then
-            output="none"
-        fi
-        output=`echo $output | sed "s/\n/ /g"`
-        ocf_log debug "replication state=$output"
-        if [ "$oldinfo" != "$output" ]; then
-            $CRM_ATTR_REBOOT -N $HOSTNAME -n $PGSQL_REP_ATTR -v "$output"
-            return $?
-        fi
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Called by Master when rep_mode=sync
 check_replication_state() {
     local rc
     local index
-    local output
+    local all_rep_status
     local state
     local sync_state
 
     if [ ! -n "$1" ]; then
         ocf_log err "Invalid args on check_replication_state()"
-        return $STATE_ERR
+        return 1
     fi
 
-    replication_state=`$CRM_ATTR_REBOOT -N $MASTER -n $PGSQL_REP_ATTR -G -q 2>/dev/null`
-    if [ "$replication_state" = "none" ]; then
-        return $STATE_NONE
+    if all_rep_status=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
+        all_rep_status=`echo $all_rep_status | sed "s/\n/ /g"`
+    else
+        return 1
     fi
-    recognized_node_number=`echo $replication_state | sed "s/ /\n/g" | wc -l`
 
+    if [ ! -n "$all_rep_status" ]; then
+        echo "DISCONNECT"
+        return 0
+    fi
+
+    recognized_node_number=`echo $all_rep_status | sed "s/ /\n/g" | wc -l`
     for index in `seq $recognized_node_number`; do
-        recognized_node=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 1`
-        state=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 2`
-        sync_state=`echo $replication_state | cut -d " " -f $index | cut -d "|" -f 3`
+        recognized_node=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 1`
+        state=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 2`
+        sync_state=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 3`
         ocf_log debug "node=$recognized_node, state=$state, sync_state=$sync_state"
         if [ "$recognized_node" = "$1" ];then
-            if [ "$state" = "STREAMING" ]; then
-                case "$sync_state" in
-                    ASYNC)
-                            return $STATE_STREAMING_ASYNC
-                            ;;
-                    SYNC)
-                            return $STATE_STREAMING_SYNC
-                            ;;
-                    POTENTIAL)
-                            return $STATE_STREAMING_POTENTIAL
-                            ;;
-                    *)
-                            return $STATE_STREAMING_UNKNOWN
-                            ;;
-                esac
-            else
-                ocf_log info "$1 still has not not been STREAMING mode yet : $recognized_node|$state|$sync_state"
-                case "$sync_state" in
-                    ASYNC)
-                            return $STATE_NOT_STREAMING_ASYNC
-                            ;;
-                    SYNC)
-                            return $STATE_NOT_STREAMING_SYNC
-                            ;;
-                    POTENTIAL)
-                            return $STATE_NOT_STREAMING_POTENTIAL
-                            ;;
-                    *)
-                            return $STATE_NOT_STREAMING_UNKNOWN
-                            ;;
-                esac
-            fi
+            echo "$state|$sync_state"
+            return 0
         fi
     done
-    return $STATE_NONE
+    return 1
 }
 
 set_async_mode_all() {
@@ -1488,25 +1352,80 @@ END
     return 0
 }
 
-create_repress_promote() {
-    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
-    if [ "$output" != "repressed" ]; then
-        $CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "repressed"
-    fi
-    return 0
-}
-
-delete_repress_promote() {
-    output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
-    if [ "$output" != "none" ]; then
-        $CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "none"
-    fi
-    return 0
-}
-
-get_repress_promote() {
+# change pgsql-status.
+# arg1:node, arg2: value
+change_pgsql_status() {
     local output
-    output=`$CRM_ATTR_FOREVER --type nodes -N `uname -n` --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+
+    [ -n $1 ] || return 1
+    [ -n $2 ] || return 1
+
+    output=`$CRM_ATTR_REBOOT -N $1 -n $PGSQL_STATUS_ATTR -G -q`
+    if [ "$output" != "$2" ]; then
+        ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
+        $CRM_ATTR_REBOOT -N $1 -n "$PGSQL_STATUS_ATTR" -v "$2"
+        if [ "$?" != "0" ]; then
+            ocf_log err "FATAL : Cannot change $PGSQL_STATUS_ATTR"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# change pgsql-data-status.
+# arg1:node, arg2: value
+change_data_status() {
+    local output
+
+    [ -n $1 ] || return 1
+    [ -n $2 ] || return 1
+
+    output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    if [ "$output" != "$2" ]; then
+        ocf_log info "Changing $PGSQL_REPRESSED_ATTR on $1 : $output->$2."
+        $CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "$2"
+        if [ "$?" != "0" ]; then
+            ocf_log err "FATAL : Cannot change $PGSQL_REPRESSED_ATTR"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# change master-score
+# arg1:node, arg2: score
+change_master_score() {
+    local rsc
+    local instance
+    local current_score
+
+    [ -n $1 ] || return 1
+    [ -n $2 ] || return 1
+
+    rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+    instance=0
+    while :
+    do
+        if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+            break
+        fi
+        if [ "${rsc}:${instance}" = "$OCF_RESOURCE_INSTANCE" ]; then
+            instance=`expr $instance + 1`
+            continue
+        fi
+
+        current_score=`$CRM_ATTR_REBOOT -N $1 -n master-${rsc}:${instance} -G -q 2>/dev/null`
+        if [ "$current_score" != "$2" ]; then
+            ocf_log info "Changing ${rsc}:${instance} master score on $1 : $current_score->$2."
+            $CRM_ATTR_REBOOT -N $target -n master-${rsc}:${instance} -v "$2"
+            if [ "$?" != "0" ]; then
+                ocf_log err "FATAL : Cannot change master score."
+                return 1
+            fi
+        fi
+        instance=`expr $instance + 1`
+    done
+    return 0
 }
 
 host_to_ip() {
@@ -1706,7 +1625,6 @@ CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
 
 CAN_NOT_PROMOTE="-INFINITY"
-PROMOTE_REPRESSED="-100000"
 CAN_PROMOTE="100"
 PROMOTE_ME="1000"
 
@@ -1715,23 +1633,11 @@ CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
 CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_stat_replication"
 
 PGSQL_STATUS_ATTR="pgsql-status"
-PGSQL_REP_ATTR="pgsql-rep-status"
 PGSQL_REPRESSED_ATTR="pgsql-data-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
 HOSTNAME=`uname -n`
 MASTER=""
-
-STATE_STREAMING_ASYNC="1"
-STATE_STREAMING_SYNC="2"
-STATE_STREAMING_POTENTIAL="3"
-STATE_STREAMING_UNKNOWN="4"
-STATE_NOT_STREAMING_ASYNC="5"
-STATE_NOT_STREAMING_SYNC="6"
-STATE_NOT_STREAMING_POTENTIAL="7"
-STATE_NOT_STREAMING_UNKNOWN="8"
-STATE_NONE="9"
-STATE_ERR="10"
 
 # We can't get a master_uname correctly on monitor correctly :-<
 if [ "$OCF_RESKEY_CRM_meta_notify_master_uname" != " " ] && [ "$1" != "monitor" ]; then
