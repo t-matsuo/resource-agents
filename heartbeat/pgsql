@@ -854,7 +854,6 @@ pgsql_post_promote() {
 #pgsql_post_demote: start PostgreSQL to transit from master to slave
 pgsql_post_demote() {
     local my_fail_count
-    local output
 
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
     ocf_log debug "post-demote called.(Demote uname is $DEMOTE_NODE)"
@@ -1167,6 +1166,8 @@ check_replication_state() {
     local rc
     local index
     local all_rep_status
+    local recognized_node_number
+    local recognized_node
     local state
     local sync_state
 
@@ -1207,6 +1208,8 @@ set_async_mode_all() {
 }
 
 set_async_mode() {
+    local sync_node_in_conf
+
     if [ ! -n "$1" ]; then
         ocf_log err "Invalid args on set_async_mode()."
         return 1
@@ -1238,6 +1241,8 @@ set_async_mode() {
 }
 
 set_sync_mode() {
+    local sync_node_in_conf
+
     if [ ! -n "$1" ]; then
         ocf_log err "Invalid args on set_sync_mode()."
         return 1
