@@ -1069,24 +1069,18 @@ is_master_right() {
        newestXlog=`cat ${OCF_RESKEY_xlog_note}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
        if [ "$newestXlog" = "$mylocation" ]; then
            ocf_log info "I have a master right."
-           if [ "$data_status" = "LATEST" ]; then
-               $CRM_MASTER -v $PROMOTE_ME
-           else
-               $CRM_MASTER -v $CAN_PROMOTE
-           fi
+           $CRM_MASTER -v $PROMOTE_ME
            return 0
        fi
+       change_data_status $HOSTNAME "DISCONNECT"
        ocf_log info "I don't have a master right."
-       change_data_state $HOSTNAME "out-of-date" 
     else
         oldfile=`cat ${OCF_RESKEY_xlog_note}.${old}`
         newfile=`cat ${OCF_RESKEY_xlog_note}.${new}`
         if [ "$oldfile" != "$newfile" ]; then
-            mv -f ${OCF_RESKEY_xlog_note}.$new ${OCF_RESKEY_xlog_note}.1
             # reset counter
-            for count in `seq 2 $OCF_RESKEY_xlog_check_count`; do
-                rm -f ${OCF_RESKEY_xlog_note}.${count}
-            done
+            rm -f ${OCF_RESKEY_xlog_note}.*
+            echo -e "$newfile" > ${OCF_RESKEY_xlog_note}.1
         fi
     fi
     return 1
