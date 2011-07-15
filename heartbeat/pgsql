@@ -551,15 +551,6 @@ pgsql_start() {
             return $OCF_ERR_GENERIC
             ;;
     esac
-
-    # If master is exist, I'll get timeline files.
-    if [ -n "$MASTER" ]; then
-        ocf_log info "Master is exist when starting"
-        if ! get_timeline_file; then
-            return $OCF_ERR_GENERIC
-        fi
-    fi
-
     return $rc
 }
 
@@ -860,11 +851,6 @@ pgsql_post_promote() {
     fi
 
     rm -f ${OCF_RESKEY_xlog_note}.*
-    if ! get_timeline_file; then
-        $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
-        return $OCF_ERR_GENERIC
-    fi
-
     return $OCF_SUCCESS
 }
 
@@ -1131,55 +1117,6 @@ show_xlog_replay_location() {
 delete_xlog_replay_location() {
     $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
     return $?
-}
-
-get_timeline_file() {
-    local filesize
-    local master
-    local timeline
-    local timeline_hex
-
-    if [ ! -n "$MASTER" ]; then
-        ocf_log err "Master is not exist when getting timeline files."
-        return 1
-    fi
-    if ! master=`host_to_ip $MASTER`; then
-        return 1
-    fi
-
-    timeline=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep TimeLineID | sed "s/ //g" | cut -d ":" -f 2`
-    if ! ocf_is_decimal "$timeline"; then
-        ocf_log err "Cannot get my Timeline ID. output=$timeline"
-        return 1
-    fi
-    ocf_log info "My Timeline ID is ${timeline}(decimal)"
-
-    timeline_hex=`perl -e "\\$num = \"$timeline\"; printf \"\%08X\",\\$num"`
-    while :
-    do
-        # increment timeline ID
-        timeline_hex=`perl -e "\\$num = hex \"${timeline_hex}\"; printf \"\%08X\",++\\$num"`
-        ocf_log debug "Searching ${timeline_hex}.history file."
-
-        # get timeline id file size
-        filesize=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc "select pg_stat_file('pg_xlog/${timeline_hex}.history')" 2>/dev/null`
-        if [ "$?" != "0" ]; then
-             ocf_log info "Timeline file ${timeline_hex}.history is not exist."
-             break
-        fi
-        filesize=`echo $filesize | cut -d "," -f 1 | cut -d "(" -f 2 2>&1`
-        ocf_log info "Find ${timeline_hex}.history file. Size is $filesize. Getting..."
-
-        # get timeline id file
-        su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h $master -p $OCF_RESKEY_pgport -Atc \"select pg_read_file('pg_xlog/${timeline_hex}.history', 0, $filesize)\" > $OCF_RESKEY_pgdata/pg_xlog/${timeline_hex}.history 2>&1"
-        if [ "$?" != 0 ]; then
-             ocf_log err "Cannot get ${timeline_hex}.history file."
-             return 1
-        fi
-    done
-    ocf_log info "Got all timeline files."
-
-    return 0
 }
 
 # Called by Master
