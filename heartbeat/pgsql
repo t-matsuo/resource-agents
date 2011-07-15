@@ -67,6 +67,7 @@ OCF_RESKEY_ip_list_default=""
 OCF_RESKEY_restore_command_default="cp /var/lib/pgsql/data/pg_archive/%f %p"
 OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_stop_on_demote_default="no"
+OCF_RESKEY_primary_conninfo_opt_default=""
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_rep_mode_conf_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.rep_mode.conf"
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
@@ -94,6 +95,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
 : ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
+: ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
 : ${OCF_RESKEY_rep_mode_conf=${OCF_RESKEY_rep_mode_conf_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
@@ -322,7 +324,16 @@ If you use yes,  monitor is failed after demote.
 <content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
 </parameter>
 
-<parameter name="rep_mode_conf" unique="0" required="0">
+<<parameter name="primary_conninfo_opt" unique="0" required="0">
+<longdesc lang="en">
+primary_conninfo options of recovery.conf exclude  host, port, user and application_name.
+This is required for replication.
+</longdesc>
+<shortdesc lang="en">primary_conninfo_opt</shortdesc>
+<content type="string" default="${OCF_RESKEY_primary_conninfo_opt_default}" />
+</parameter>
+
+parameter name="rep_mode_conf" unique="0" required="0">
 <longdesc lang="en">
 Path to file included from postgresq.conf to switch between async adn sync.
 This parameter is required for "rep_mode=sync".
@@ -1306,7 +1317,7 @@ make_recovery_conf() {
 
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
-primary_conninfo = 'host=${host} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME}'
+primary_conninfo = 'host=${host} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '$OCF_RESKEY_restore_command'
 recovery_target_timeline='latest'
 END
