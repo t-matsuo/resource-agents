@@ -66,6 +66,7 @@ OCF_RESKEY_node_list_default=""
 OCF_RESKEY_ip_list_default=""
 OCF_RESKEY_restore_command_default="cp /var/lib/pgsql/data/pg_archive/%f %p"
 OCF_RESKEY_master_ip_default=""
+OCF_RESKEY_stop_on_demote_default="no"
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_rep_mode_conf_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.rep_mode.conf"
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
@@ -92,6 +93,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_ip_list=${OCF_RESKEY_ip_list_default}}
 : ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
+: ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
 : ${OCF_RESKEY_rep_mode_conf=${OCF_RESKEY_rep_mode_conf_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
@@ -309,6 +311,15 @@ If you configure three or above nodes in replication, this is required.
 </longdesc>
 <shortdesc lang="en">maseter ip</shortdesc>
 <content type="string" default="${OCF_RESKEY_master_ip_default}" />
+</parameter>
+
+<parameter name="stop_on_demote" unique="0" required="0">
+<longdesc lang="en">
+Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default)
+If you use yes,  monitor is failed after demote.
+</longdesc>
+<shortdesc lang="en">stop_on_demote</shortdesc>
+<content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
 </parameter>
 
 <parameter name="rep_mode_conf" unique="0" required="0">
@@ -611,6 +622,7 @@ pgsql_demote() {
     fi
     change_pgsql_status $HOSTNAME "STOP"
     set_async_mode_all
+    rm -f ${OCF_RESKEY_xlog_note}.*
     return $OCF_SUCCESS
 }
 
@@ -842,6 +854,11 @@ pgsql_post_promote() {
         return $OCF_SUCCESS
     fi
 
+    if ! pgsql_status; then
+        ocf_log info "PostgreSQL is stopped on post-promote."
+        return $OCF_SUCCESS
+    fi
+
     rm -f ${OCF_RESKEY_xlog_note}.*
     if ! get_timeline_file; then
         $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
@@ -861,13 +878,17 @@ pgsql_post_demote() {
     # I start pgsql on post_demote()
     # because if it's failed starting pgsql on demote, node is fenced.
     if [ "$DEMOTE_NODE" = "$HOSTNAME" ]; then
+        if [ "$OCF_RESKEY_stop_on_demote" != "no" ]; then
+            ocf_log info "I don't restart on post-demote because of stop_on_demote=$OCF_RESKEY_stop_on_demote."
+            return $OCF_SUCCESS
+        fi
+
         my_fail_count=`$CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -N $HOSTNAME -G -Q | sed "s/INFINITY/1000000/g"`
         if [ "$my_fail_count" != "0" ]; then
             ocf_log info "My fail-count=$my_fail_count, so I don't start on post-demote."
             return $OCF_SUCCESS
         fi
 
-        rm -f ${OCF_RESKEY_xlog_note}.*
         if ! make_recovery_conf; then
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
             return $OCF_ERR_GENERIC
