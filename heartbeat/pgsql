@@ -610,7 +610,7 @@ pgsql_demote() {
 
     if ! pgsql_status
     then
-        ocf_log info "PostgreSQL is already stopped."
+        ocf_log info "PostgreSQL is already stopped on demote."
         change_pgsql_status $HOSTNAME "STOP"
         return $OCF_SUCCESS
     fi
