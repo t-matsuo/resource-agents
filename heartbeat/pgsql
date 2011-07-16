@@ -324,7 +324,7 @@ If you use yes,  monitor is failed after demote.
 <content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
 </parameter>
 
-<<parameter name="primary_conninfo_opt" unique="0" required="0">
+<parameter name="primary_conninfo_opt" unique="0" required="0">
 <longdesc lang="en">
 primary_conninfo options of recovery.conf exclude  host, port, user and application_name.
 This is required for replication.
@@ -333,7 +333,7 @@ This is required for replication.
 <content type="string" default="${OCF_RESKEY_primary_conninfo_opt_default}" />
 </parameter>
 
-parameter name="rep_mode_conf" unique="0" required="0">
+<parameter name="rep_mode_conf" unique="0" required="0">
 <longdesc lang="en">
 Path to file included from postgresq.conf to switch between async adn sync.
 This parameter is required for "rep_mode=sync".
