@@ -63,7 +63,6 @@ OCF_RESKEY_monitor_sql_default="select now();"
 # Defaults for replication
 OCF_RESKEY_rep_mode_default=none
 OCF_RESKEY_node_list_default=""
-OCF_RESKEY_ip_list_default=""
 OCF_RESKEY_restore_command_default="cp /var/lib/pgsql/data/pg_archive/%f %p"
 OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_stop_on_demote_default="no"
@@ -91,7 +90,6 @@ OCF_RESKEY_xlog_check_count_default="3"
 # for replication
 : ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
 : ${OCF_RESKEY_node_list=${OCF_RESKEY_node_list_default}}
-: ${OCF_RESKEY_ip_list=${OCF_RESKEY_ip_list_default}}
 : ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
 : ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
@@ -266,7 +264,7 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <longdesc lang="en">
 Replication mode(none(default)/async/sync).
 "aync","sync" require PostgreSQL 9.1 or later.
-If you use async or sync, it requires node_list, ip_list, restore_command
+If you use async or sync, it requires node_list, master_ip, restore_command
 parameters, and needs setting postgresql.conf, pg_hba.conf up for
 replication.
 </longdesc>
@@ -281,18 +279,6 @@ This is required for replication.
 </longdesc>
 <shortdesc lang="en">node list</shortdesc>
 <content type="string" default="${OCF_RESKEY_node_list_default}" />
-</parameter>
-
-<parameter name="ip_list" unique="0" required="0">
-<longdesc lang="en">
-IP list for replication LAN.
-Plaese separate each IP with a space.
-This order is the same as that used in the node_list parameter.
-You have to configure PostgreSQL for permit a connection to this IP.
-This is required for replication.
-</longdesc>
-<shortdesc lang="en">ip list</shortdesc>
-<content type="string" default="${OCF_RESKEY_ip_list_default}" />
 </parameter>
 
 <parameter name="restore_command" unique="0" required="0">
@@ -1233,28 +1219,8 @@ reload_conf() {
 }
 
 make_recovery_conf() {
-    local host
     local node
     local node_number
-
-    if [ -n "$OCF_RESKEY_master_ip" ]; then
-        # If master's floating IP for replication is defined, I use it.
-        host=$OCF_RESKEY_master_ip
-    else
-        node_number=`echo "$OCF_RESKEY_node_list" | sed -e "s/  //g" | sed "s/ /\n/g" | wc -l`
-        if [ "$node_number" = 2 ]; then
-            # If 2 nodes configured, make a recovery.conf from ip_list
-            for node in ${OCF_RESKEY_node_list}; do
-                if [ "$node" != "$HOSTNAME" ]; then
-                    host=`host_to_ip $node`
-                    break
-                fi
-            done
-        else
-            ocf_log err "master_ip can't be empty."
-            return 1
-        fi
-    fi
 
     touch $RECOVERY_CONF
     if ! chown $OCF_RESKEY_pgdba $RECOVERY_CONF; then
@@ -1264,7 +1230,7 @@ make_recovery_conf() {
 
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
-primary_conninfo = 'host=${host} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
+primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '$OCF_RESKEY_restore_command'
 recovery_target_timeline='latest'
 END
@@ -1342,21 +1308,6 @@ change_master_score() {
     return 0
 }
 
-host_to_ip() {
-    local host
-    local index=1
-
-    for host in $OCF_RESKEY_node_list; do
-        if [ "$1" = "$host" ]; then
-            echo `echo "$OCF_RESKEY_ip_list" | tr -s " " | cut -d " " -f $index`
-            return 0
-        fi
-        index=`expr $index + 1`
-    done
-    ocf_log err "Cannot find $1 IP."
-    return 1
-}
-
 check_binary2() {
     if ! have_binary "$1"; then
         ocf_log err "Setup problem: couldn't find command: $1"
@@ -1425,9 +1376,8 @@ pgsql_validate_all() {
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
             return $OCF_ERR_INSTALLED;
         fi
-
-        if [ ! -n "$OCF_RESKEY_ip_list" ]; then
-            ocf_log err "ip_list can't be empty"
+        if [ ! -n "$OCF_RESKEY_master_ip" ]; then
+            ocf_log err "master_ip can't be empty"
             return $OCF_ERR_CONFIGURED
         fi
         if [ ! -n "$OCF_RESKEY_node_list" ]; then
