@@ -1243,10 +1243,6 @@ END
 # arg1:node, arg2: value
 change_pgsql_status() {
     local output
-
-    [ -n $1 ] || return 1
-    [ -n $2 ] || return 1
-
     output=`$CRM_ATTR_REBOOT -N $1 -n $PGSQL_STATUS_ATTR -G -q`
     if [ "$output" != "$2" ]; then
         ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
