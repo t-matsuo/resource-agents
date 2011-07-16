@@ -519,6 +519,7 @@ pgsql_start() {
     change_pgsql_status "$HOSTNAME" "STOP"
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${XLOG_NOTE_FILE}*
+    chown $OCF_RESKEY_pgdba $OCF_RESKEY_rep_mode_conf
     if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
