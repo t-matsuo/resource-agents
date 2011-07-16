@@ -846,25 +846,6 @@ pgsql_monitor() {
     return $rc
 }
 
-#pgsql_post_promote: prepare connectiong primary
-pgsql_post_promote() {
-    ocf_log debug "post-promote called.(Master is $MASTER)"
-	delete_xlog_replay_location
-
-    if [ "$MASTER" = "$HOSTNAME" ]; then
-        handle_sync_mode_and_master_score
-        return $OCF_SUCCESS
-    fi
-
-    if ! pgsql_status; then
-        ocf_log info "PostgreSQL is stopped on post-promote."
-        return $OCF_SUCCESS
-    fi
-
-    rm -f ${OCF_RESKEY_xlog_note}.*
-    return $OCF_SUCCESS
-}
-
 #pgsql_post_demote: start PostgreSQL to transit from master to slave
 pgsql_post_demote() {
     local my_fail_count
@@ -915,8 +896,7 @@ pgsql_notify() {
         post)
             case $op in
                 promote)
-                    MASTER=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
-                    pgsql_post_promote
+                    delete_xlog_replay_location
                     return $?
                     ;;
                 demote)
@@ -927,17 +907,6 @@ pgsql_notify() {
                     if [ "$HOSTNAME" = "$MASTER" ]; then
                         handle_sync_mode_and_master_score
                     fi
-                    return $OCF_SUCCESS
-                    ;;
-            esac
-            ;;
-        pre)
-            case $op in
-                promote)
-                    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
-#                    if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
-#                        $CRM_MASTER -v $CAN_NOT_PROMOTE
-#                    fi
                     return $OCF_SUCCESS
                     ;;
             esac
