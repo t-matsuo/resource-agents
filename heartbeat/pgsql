@@ -536,18 +536,12 @@ pgsql_start() {
 
     # start
     pgsql_real_start
-    rc=$?
-
-    case "$rc" in
-        $OCF_SUCCESS)
-            change_pgsql_status "$HOSTNAME" "HS:alone"
-            ;;
-        *)
+    if [ "$?" != "$OCF_SUCCESS" ]; then
             ocf_log warn "PostgreSQL has not started as a hot standby."
             return $OCF_ERR_GENERIC
-            ;;
-    esac
-    return $rc
+    fi
+    change_pgsql_status "$HOSTNAME" "HS:alone"
+    return $OCF_SUCCESS
 }
 
 #pgsql_promote: Promote PostgreSQL
