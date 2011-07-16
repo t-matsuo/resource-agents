@@ -827,7 +827,7 @@ pgsql_monitor() {
             rm -f ${OCF_RESKEY_xlog_note}.$count
         fi
     else
-        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
             change_pgsql_status "$HOSTNAME" "HS:alone"
         fi
@@ -1000,7 +1000,7 @@ is_master_right() {
 
     ocf_log debug "Checking right of master."
 
-    data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
         if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
@@ -1259,12 +1259,12 @@ change_pgsql_status() {
 # arg1:node, arg2: value
 change_data_status() {
     local output
-    output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
+    output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$output" != "$2" ]; then
-        ocf_log info "Changing $PGSQL_REPRESSED_ATTR on $1 : $output->$2."
-        $CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_REPRESSED_ATTR" --attr-value "$2"
+        ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
+        $CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" --attr-value "$2"
         if [ "$?" != "0" ]; then
-            ocf_log err "FATAL : Cannot change $PGSQL_REPRESSED_ATTR"
+            ocf_log err "FATAL : Cannot change $PGSQL_DATA_STATUS_ATTR"
             return 1
         fi
     fi
@@ -1489,7 +1489,7 @@ CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
 CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_stat_replication"
 
 PGSQL_STATUS_ATTR="pgsql-status"
-PGSQL_REPRESSED_ATTR="pgsql-data-status"
+PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
 HOSTNAME=`uname -n`
