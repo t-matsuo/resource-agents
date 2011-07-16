@@ -803,7 +803,7 @@ pgsql_real_monitor() {
 pgsql_monitor() {
     local rc
     local my_status
-    local rep_status
+    local data_status
 
     pgsql_real_monitor
     rc=$?
@@ -947,47 +947,74 @@ pgsql_notify() {
 }
 
 handle_sync_mode_and_master_score() {
-    local rep_state
+    local data_status
     local target
+    local all_data_status
+    local node_number
+    local node_name
+
+    if all_data_status=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
+        if [ -n "$all_data_status" ]; then
+            node_number=`echo -e "$all_data_status" | wc -l`
+            all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
+        fi
+    else
+        ocf_log warn "psql err."
+        all_data_status=""
+    fi
 
     for target in $OCF_RESKEY_node_list; do
         if [ "$target" = "$HOSTNAME" ]; then
             continue
         fi
-        rep_state=`check_replication_state $target`
-        case "$rep_state" in
+
+        data_status="DISCONNECT"
+        if [ -n "$all_data_status" ]; then
+            for index in `seq $node_number`; do
+                node_name=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 1`
+                state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 2`
+                sync_state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 3`
+                ocf_log debug "node=$node_name, state=$state, sync_state=$sync_state"
+                if [ "$node_name" = "$target" ];then
+                    data_status="$state|$sync_state"
+                    break
+                fi
+            done
+        fi
+
+        case "$data_status" in
             "STREAMING|SYNC")
-                change_data_status "$target" "$rep_state"
+                change_data_status "$target" "$data_status"
                 change_master_score "$target" $CAN_PROMOTE
                 change_pgsql_status "$target" "HS:sync"
                 ;;
             "STREAMING|ASYNC")
-                change_data_status "$target" "$rep_state"
+                change_data_status "$target" "$data_status"
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     change_master_score "$target" $CAN_NOT_PROMOTE
                     if ! is_sync_mode $target; then
                         set_sync_mode $target
                     fi
                 else
-                    change_data_status "$target" "$rep_state"
+                    change_data_status "$target" "$data_status"
                     change_master_score "$target" $CAN_PROMOTE
                 fi
                 change_pgsql_status "$target" "HS:async"
                 ;;
             "STREAMING|POTENTIAL")
-                change_data_status "$target" "$rep_state"
+                change_data_status "$target" "$data_status"
                 change_master_score "$target" $CAN_NOT_PROMOTE
                 change_pgsql_status "$target" "HS:potential"
                 ;;
             "DISCONNECT")
-                change_data_status "$target" "$rep_state"
+                change_data_status "$target" "$data_status"
                 change_master_score "$target" $CAN_NOT_PROMOTE
                 if is_sync_mode $target; then
                     set_async_mode $target
                 fi
                 ;;
             *)
-                change_data_status "$target" "$rep_state"
+                change_data_status "$target" "$data_status"
                 change_master_score "$target" $CAN_NOT_PROMOTE
                 if is_sync_mode $target; then
                     set_async_mode $target
@@ -1122,46 +1149,6 @@ show_xlog_replay_location() {
 delete_xlog_replay_location() {
     $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
     return $?
-}
-
-# Called by Master
-check_replication_state() {
-    local rc
-    local index
-    local all_rep_status
-    local recognized_node_number
-    local recognized_node
-    local state
-    local sync_state
-
-    if [ ! -n "$1" ]; then
-        ocf_log err "Invalid args on check_replication_state()"
-        return 1
-    fi
-
-    if all_rep_status=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
-        all_rep_status=`echo $all_rep_status | sed "s/\n/ /g"`
-    else
-        return 1
-    fi
-
-    if [ ! -n "$all_rep_status" ]; then
-        echo "DISCONNECT"
-        return 0
-    fi
-
-    recognized_node_number=`echo $all_rep_status | sed "s/ /\n/g" | wc -l`
-    for index in `seq $recognized_node_number`; do
-        recognized_node=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 1`
-        state=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 2`
-        sync_state=`echo $all_rep_status | cut -d " " -f $index | cut -d "|" -f 3`
-        ocf_log debug "node=$recognized_node, state=$state, sync_state=$sync_state"
-        if [ "$recognized_node" = "$1" ];then
-            echo "$state|$sync_state"
-            return 0
-        fi
-    done
-    return 1
 }
 
 set_async_mode_all() {
