@@ -811,7 +811,7 @@ pgsql_monitor() {
         MASTER=$HOSTNAME
         change_data_status "$HOSTNAME" "LATEST"
         change_pgsql_status "$HOSTNAME" "PRI"
-        handle_sync_mode_and_master_score || return $OCF_ERR_GENERIC
+        control_slave_status || return $OCF_ERR_GENERIC
         return $rc
     fi
 
@@ -895,7 +895,7 @@ pgsql_notify() {
                     ;;
                 start|stop)
                     if [ "$HOSTNAME" = "$MASTER" ]; then
-                        handle_sync_mode_and_master_score
+                        control_slave_status
                     fi
                     return $OCF_SUCCESS
                     ;;
@@ -905,7 +905,7 @@ pgsql_notify() {
     return $OCF_SUCCESS
 }
 
-handle_sync_mode_and_master_score() {
+control_slave_status() {
     local data_status
     local target
     local all_data_status
