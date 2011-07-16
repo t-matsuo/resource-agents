@@ -294,8 +294,7 @@ This is required for replication.
 <longdesc lang="en">
 Master's floating IP address to be connected from hot standby.
 This parameter used for "primary_conninfon" of recovery.conf.
-If you configure two nodes, this is optional.
-If you configure three or above nodes in replication, this is required.
+This is required for replication.
 </longdesc>
 <shortdesc lang="en">maseter ip</shortdesc>
 <content type="string" default="${OCF_RESKEY_master_ip_default}" />
@@ -313,7 +312,7 @@ If you use yes,  monitor is failed after demote.
 <parameter name="primary_conninfo_opt" unique="0" required="0">
 <longdesc lang="en">
 primary_conninfo options of recovery.conf exclude  host, port, user and application_name.
-This is required for replication.
+This is optional for replication.
 </longdesc>
 <shortdesc lang="en">primary_conninfo_opt</shortdesc>
 <content type="string" default="${OCF_RESKEY_primary_conninfo_opt_default}" />
