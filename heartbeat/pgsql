@@ -1090,7 +1090,7 @@ show_xlog_replay_location() {
     output=`su ${OCF_RESKEY_pgdba} -c "cd ${OCF_RESKEY_pgdata}; ${OCF_RESKEY_psql} -U ${OCF_RESKEY_pgdba} -p ${OCF_RESKEY_pgport} -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
     rc=$?
     if [ "$rc" != "0" ]; then
-        ocf_log err "Can not get my xlog replay location."
+        ocf_log err "Cannot get my xlog replay location."
         return $rc
     fi
 
