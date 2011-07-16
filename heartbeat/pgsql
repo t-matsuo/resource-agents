@@ -542,7 +542,7 @@ pgsql_start() {
     fi
 
     # initializing for replication
-    change_pgsql_status $HOSTNAME "STOP"
+    change_pgsql_status "$HOSTNAME" "STOP"
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${OCF_RESKEY_xlog_note}*
     if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
@@ -555,7 +555,7 @@ pgsql_start() {
 
     case "$rc" in
         $OCF_SUCCESS)
-            change_pgsql_status $HOSTNAME "HS:alone"
+            change_pgsql_status "$HOSTNAME" "HS:alone"
             ;;
         *)
             ocf_log warn "PostgreSQL has not started as a hot standby."
@@ -567,6 +567,7 @@ pgsql_start() {
 
 #pgsql_promote: Promote PostgreSQL
 pgsql_promote() {
+    local target
     local rc
     local output
 
@@ -576,7 +577,12 @@ pgsql_promote() {
     fi
     rm -f ${OCF_RESKEY_xlog_note}.*
 
-    handle_sync_mode_and_master_score
+    for target in $OCF_RESKEY_node_list; do
+        [ "$target" = "$HOSTNAME" ] && continue
+        change_data_status "$target" "DISCONNECT"
+        change_master_score "$target" "$CAN_NOT_PROMOTE"
+    done
+
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
     while :
     do
@@ -589,11 +595,10 @@ pgsql_promote() {
         ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
     done
     ocf_log info "PostgreSQL is promoted."
-    change_pgsql_status $HOSTNAME "PRI"
-    $CRM_MASTER -v $PROMOTE_ME
-    handle_sync_mode_and_master_score
-    change_data_status $HOSTNAME "LATEST"
 
+    change_data_status "$HOSTNAME" "LATEST"
+    $CRM_MASTER -v $PROMOTE_ME
+    change_pgsql_status "$HOSTNAME" "PRI"
     return $OCF_SUCCESS
 }
 
@@ -611,18 +616,18 @@ pgsql_demote() {
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped on demote."
-        change_pgsql_status $HOSTNAME "STOP"
+        change_pgsql_status "$HOSTNAME" "STOP"
         return $OCF_SUCCESS
     fi
 
     ocf_log info "Stopping PostgreSQL on demote."
     pgsql_real_stop
     rc=$?
-    if [ $rc -ne $OCF_SUCCESS ]; then
-        change_pgsql_status $HOSTNAME "UNKNOWN"
+    if [ "$rc" -ne "$OCF_SUCCESS" ]; then
+        change_pgsql_status "$HOSTNAME" "UNKNOWN"
         return $rc
     fi
-    change_pgsql_status $HOSTNAME "STOP"
+    change_pgsql_status "$HOSTNAME" "STOP"
     set_async_mode_all
     rm -f ${OCF_RESKEY_xlog_note}.*
     return $OCF_SUCCESS
@@ -695,18 +700,18 @@ pgsql_stop() {
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
-        change_pgsql_status $HOSTNAME "STOP"
+        change_pgsql_status "$HOSTNAME" "STOP"
         return $OCF_SUCCESS
     fi
 
     pgsql_real_stop
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
-        change_pgsql_status $HOSTNAME "UNKNOWN"
+        change_pgsql_status "$HOSTNAME" "UNKNOWN"
         return $rc
     fi
 
-    change_pgsql_status $HOSTNAME "STOP"
+    change_pgsql_status "$HOSTNAME" "STOP"
     set_async_mode_all
     return $OCF_SUCCESS
 }
@@ -818,11 +823,9 @@ pgsql_monitor() {
     # If I am Master
     if [ "$rc" = "$OCF_RUNNING_MASTER" ]; then
         MASTER=$HOSTNAME
-        change_data_status $HOSTNAME "LATEST"
-        change_pgsql_status $HOSTNAME "PRI"
-        if ! handle_sync_mode_and_master_score; then
-            return $OCF_ERR_GENERIC
-        fi
+        change_data_status "$HOSTNAME" "LATEST"
+        change_pgsql_status "$HOSTNAME" "PRI"
+        handle_sync_mode_and_master_score || return $OCF_ERR_GENERIC
         return $rc
     fi
 
@@ -832,7 +835,7 @@ pgsql_monitor() {
     if [ ! -n "$MASTER" ]; then
         # If I am Slave and Master is not exist
         ocf_log info "Master is not exist."
-        change_pgsql_status $HOSTNAME "HS:alone"
+        change_pgsql_status "$HOSTNAME" "HS:alone"
         is_master_right
         if [ "$?" = "0" ]; then
             rm -f ${OCF_RESKEY_xlog_note}.$count
@@ -840,7 +843,7 @@ pgsql_monitor() {
     else
         output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
-            change_pgsql_status $HOSTNAME "HS:alone"
+            change_pgsql_status "$HOSTNAME" "HS:alone"
         fi
     fi
     return $rc
@@ -872,17 +875,18 @@ pgsql_post_demote() {
             return $OCF_ERR_GENERIC
         fi
 
+        set_async_mode_all
         pgsql_real_start
         if [ $? -ne $OCF_SUCCESS ]; then
             ocf_log err "Cannot start PostgreSQL as a hot standby on post-demote."
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
             return $OCF_ERR_GENERIC
         fi
-        change_pgsql_status $HOSTNAME "HS:alone"
+        change_pgsql_status "$HOSTNAME" "HS:alone"
         return $OCF_SUCCESS
     fi
 
-    change_pgsql_status $HOSTNAME "HS:alone"
+    change_pgsql_status "$HOSTNAME" "HS:alone"
     return $OCF_SUCCESS
 }
 
@@ -954,39 +958,39 @@ handle_sync_mode_and_master_score() {
         case "$data_status" in
             "STREAMING|SYNC")
                 change_data_status "$target" "$data_status"
-                change_master_score "$target" $CAN_PROMOTE
+                change_master_score "$target" "$CAN_PROMOTE"
                 change_pgsql_status "$target" "HS:sync"
                 ;;
             "STREAMING|ASYNC")
                 change_data_status "$target" "$data_status"
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-                    change_master_score "$target" $CAN_NOT_PROMOTE
-                    if ! is_sync_mode $target; then
-                        set_sync_mode $target
+                    change_master_score "$target" "$CAN_NOT_PROMOTE"
+                    if ! is_sync_mode "$target"; then
+                        set_sync_mode "$target"
                     fi
                 else
                     change_data_status "$target" "$data_status"
-                    change_master_score "$target" $CAN_PROMOTE
+                    change_master_score "$target" "$CAN_PROMOTE"
                 fi
                 change_pgsql_status "$target" "HS:async"
                 ;;
             "STREAMING|POTENTIAL")
                 change_data_status "$target" "$data_status"
-                change_master_score "$target" $CAN_NOT_PROMOTE
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
                 change_pgsql_status "$target" "HS:potential"
                 ;;
             "DISCONNECT")
                 change_data_status "$target" "$data_status"
-                change_master_score "$target" $CAN_NOT_PROMOTE
-                if is_sync_mode $target; then
-                    set_async_mode $target
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
+                if is_sync_mode "$target"; then
+                    set_async_mode "$target"
                 fi
                 ;;
             *)
                 change_data_status "$target" "$data_status"
-                change_master_score "$target" $CAN_NOT_PROMOTE
-                if is_sync_mode $target; then
-                    set_async_mode $target
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
+                if is_sync_mode "$target"; then
+                    set_async_mode "$target"
                 fi
                 change_pgsql_status "$target" "HS:connected"
                 ;;
@@ -1068,7 +1072,7 @@ is_master_right() {
            $CRM_MASTER -v $PROMOTE_ME
            return 0
        fi
-       change_data_status $HOSTNAME "DISCONNECT"
+       change_data_status "$HOSTNAME" "DISCONNECT"
        ocf_log info "I don't have a master right."
     else
         oldfile=`cat ${OCF_RESKEY_xlog_note}.${old}`
@@ -1121,18 +1125,17 @@ delete_xlog_replay_location() {
 }
 
 set_async_mode_all() {
-    ocf_log info "Setup all nodes as a async."
-    echo "" > "$OCF_RESKEY_rep_mode_conf"
+    ocf_log info "Setup all nodes as an async."
+    echo "" > "$OCF_RESKEY_rep_mode_conf" || return 1
+    if [ "$?" != "0" ]; then
+        ocf_log err "Cannot setup all nodes as an async mode."
+        return 1
+    fi
     return 0
 }
 
 set_async_mode() {
     local sync_node_in_conf
-
-    if [ ! -n "$1" ]; then
-        ocf_log err "Invalid args on set_async_mode()."
-        return 1
-    fi
 
     sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
@@ -1141,7 +1144,7 @@ set_async_mode() {
             ocf_log info "$1 is already async mode."
             return 0
         else
-            ocf_log info "Setup $1 as a async mode."
+            ocf_log info "Setup $1 as an async mode."
             sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |  sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
             if [ -n $sync_node_in_conf ]; then
                 echo "synchronous_standby_names = '$sync_node_in_conf'" > "$OCF_RESKEY_rep_mode_conf"
@@ -1162,10 +1165,6 @@ set_async_mode() {
 set_sync_mode() {
     local sync_node_in_conf
 
-    if [ ! -n "$1" ]; then
-        ocf_log err "Invalid args on set_sync_mode()."
-        return 1
-    fi
     sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
         if echo "$sync_node_in_conf" | grep "$1"; then
@@ -1189,10 +1188,6 @@ set_sync_mode() {
 is_sync_mode() {
     local target
 
-    if [ ! -n "$1" ]; then
-        ocf_log err "Invalid args on is_sync_mode()."
-        return 1
-    fi
     sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2 | sed "s/,/ /g"`
     if [ -n "$sync_node_in_conf" ]; then
         for target in $sync_node_in_conf; do
@@ -1211,18 +1206,18 @@ reload_conf() {
     # Set options passed to the PostgreSQL server process
     postgres_options=""
     if [ -n "$OCF_RESKEY_config" ]; then
-	postgres_options="$postgres_options -c config_file=${OCF_RESKEY_config}"
+    postgres_options="$postgres_options -c config_file=${OCF_RESKEY_config}"
     fi
     if [ -n "$OCF_RESKEY_pghost" ]; then
-	postgres_options="$postgres_options -h $OCF_RESKEY_pghost"
+    postgres_options="$postgres_options -h $OCF_RESKEY_pghost"
     fi
     if [ -n "$OCF_RESKEY_start_opt" ]; then
-	postgres_options="$postgres_options $OCF_RESKEY_start_opt"
+    postgres_options="$postgres_options $OCF_RESKEY_start_opt"
     fi
 
     # Tack pass-through options onto pg_ctl options
     if [ -n "$postgres_options" ]; then
-	pgctl_options="$pgctl_options -o '$postgres_options'"
+    pgctl_options="$pgctl_options -o '$postgres_options'"
     fi
 
     # Invoke pg_ctl
@@ -1230,7 +1225,7 @@ reload_conf() {
     if [ $? -eq 0 ]; then
         ocf_log info "Reload configuration file."
     else
-	ocf_log err "Cannot reload configuration file."
+        ocf_log err "Cannot reload configuration file."
         return 1
     fi
 
@@ -1240,13 +1235,14 @@ reload_conf() {
 make_recovery_conf() {
     local host
     local node
+    local node_number
 
     if [ -n "$OCF_RESKEY_master_ip" ]; then
         # If master's floating IP for replication is defined, I use it.
         host=$OCF_RESKEY_master_ip
     else
-        nodes=`echo "$OCF_RESKEY_node_list" | sed -e "s/  //g" | sed "s/ /\n/g" | wc -l`
-        if [ "$nodes" = 2 ]; then
+        node_number=`echo "$OCF_RESKEY_node_list" | sed -e "s/  //g" | sed "s/ /\n/g" | wc -l`
+        if [ "$node_number" = 2 ]; then
             # If 2 nodes configured, make a recovery.conf from ip_list
             for node in ${OCF_RESKEY_node_list}; do
                 if [ "$node" != "$HOSTNAME" ]; then
@@ -1255,6 +1251,7 @@ make_recovery_conf() {
                 fi
             done
         else
+            ocf_log err "master_ip can't be empty."
             return 1
         fi
     fi
@@ -1300,10 +1297,6 @@ change_pgsql_status() {
 # arg1:node, arg2: value
 change_data_status() {
     local output
-
-    [ -n $1 ] || return 1
-    [ -n $2 ] || return 1
-
     output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_REPRESSED_ATTR" -G -q`
     if [ "$output" != "$2" ]; then
         ocf_log info "Changing $PGSQL_REPRESSED_ATTR on $1 : $output->$2."
@@ -1322,9 +1315,6 @@ change_master_score() {
     local rsc
     local instance
     local current_score
-
-    [ -n $1 ] || return 1
-    [ -n $2 ] || return 1
 
     rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
     instance=0
@@ -1356,10 +1346,6 @@ host_to_ip() {
     local host
     local index=1
 
-    if [ ! -n "$1" ]; then
-        ocf_log warn "Invalid args on host_to_ip()."
-        return 1
-    fi
     for host in $OCF_RESKEY_node_list; do
         if [ "$1" = "$host" ]; then
             echo `echo "$OCF_RESKEY_ip_list" | tr -s " " | cut -d " " -f $index`
@@ -1441,15 +1427,15 @@ pgsql_validate_all() {
         fi
 
         if [ ! -n "$OCF_RESKEY_ip_list" ]; then
-            ocf_log err "ip_list is null"
+            ocf_log err "ip_list can't be empty"
             return $OCF_ERR_CONFIGURED
         fi
         if [ ! -n "$OCF_RESKEY_node_list" ]; then
-            ocf_log err "node_list is null"
+            ocf_log err "node_list can't be empty"
             return $OCF_ERR_CONFIGURED
         fi
         if [ ! -n "$OCF_RESKEY_restore_command" ]; then
-            ocf_log err "restore_command is null"
+            ocf_log err "restore_command can't be empty"
             return $OCF_ERR_CONFIGURED
         fi
         if ! check_binary2 "$OCF_RESKEY_pgctldata" ||
