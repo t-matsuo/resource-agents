@@ -1221,7 +1221,7 @@ restore_command = '$OCF_RESKEY_restore_command'
 recovery_target_timeline='latest'
 END
 
-    ocf_log info "Created recovery.conf. host=${host}"
+    ocf_log info "Created recovery.conf. host=$OCF_RESKEY_master_ip}"
     return 0
 }
 
