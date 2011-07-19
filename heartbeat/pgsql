@@ -63,7 +63,7 @@ OCF_RESKEY_monitor_sql_default="select now();"
 # Defaults for replication
 OCF_RESKEY_rep_mode_default=none
 OCF_RESKEY_node_list_default=""
-OCF_RESKEY_restore_command_default="cp /var/lib/pgsql/data/pg_archive/%f %p"
+OCF_RESKEY_restore_command_default=""
 OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_stop_on_demote_default="no"
 OCF_RESKEY_primary_conninfo_opt_default=""
