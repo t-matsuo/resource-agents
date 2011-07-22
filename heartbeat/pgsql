@@ -68,7 +68,6 @@ OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_stop_on_demote_default="no"
 OCF_RESKEY_primary_conninfo_opt_default=""
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
-OCF_RESKEY_rep_mode_conf_default="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.rep_mode.conf"
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_xlog_check_count_default="3"
 
@@ -93,8 +92,8 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
 : ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
 : ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
-: ${OCF_RESKEY_rep_mode_conf=${OCF_RESKEY_rep_mode_conf_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
+: ${OCF_RESKEY_rep_mode_conf="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.rep_mode.conf"}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
@@ -302,6 +301,7 @@ This is required for replication.
 <longdesc lang="en">
 Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default)
 If you use yes,  monitor is failed after demote.
+This is optional for replication.
 </longdesc>
 <shortdesc lang="en">stop_on_demote</shortdesc>
 <content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
@@ -316,17 +316,6 @@ This is optional for replication.
 <content type="string" default="${OCF_RESKEY_primary_conninfo_opt_default}" />
 </parameter>
 
-<parameter name="rep_mode_conf" unique="0" required="0">
-<longdesc lang="en">
-Path to file included from postgresq.conf to switch between async adn sync.
-This parameter is required for "rep_mode=sync".
-Don't write synchronous_standby_names directive in postgresql.conf.
-This is optional for replication.
-</longdesc>
-<shortdesc lang="en">rep_mode_conf</shortdesc>
-<content type="string" default="${OCF_RESKEY_rep_mode_conf_default}" />
-</parameter>
-
 <parameter name="tmpdir" unique="0" required="0">
 <longdesc lang="en">
 Path to temporary directory.
@@ -334,6 +323,17 @@ This is optional for replication.
 </longdesc>
 <shortdesc lang="en">tmpdir</shortdesc>
 <content type="string" default="${OCF_RESKEY_tmpdir_default}" />
+</parameter>
+
+<parameter name="rep_mode_conf" unique="0" required="0">
+<longdesc lang="en">
+Path to file included from postgresq.conf to switch between async and sync.
+This parameter is used for "rep_mode=sync".
+Don't write synchronous_standby_names directive in postgresql.conf.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">rep_mode_conf</shortdesc>
+<content type="string" default="\${tmpdir}/PGSQL.\${pgport}.rep_mode.conf" />
 </parameter>
 
 <parameter name="pgctldata" unique="0" required="0">
@@ -351,7 +351,7 @@ Number of checking xlog on monitor before promote.
 This is optional for replication.
 </longdesc>
 <shortdesc lang="en">xlog check count</shortdesc>
-<content type="string" default="${OCF_RESKEY_check_count_default}" />
+<content type="integer" default="${OCF_RESKEY_check_count_default}" />
 </parameter>
 
 </parameters>
@@ -1356,7 +1356,7 @@ pgsql_validate_all() {
     if is_replication; then
         if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
-            return $OCF_ERR_INSTALLED;
+            return $OCF_ERR_PERM
         fi
         if [ ! -n "$OCF_RESKEY_master_ip" ]; then
             ocf_log err "master_ip can't be empty"
@@ -1379,11 +1379,11 @@ pgsql_validate_all() {
 
         if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
             if [ ! -n "$OCF_RESKEY_rep_mode_conf" ]; then
-                return $OCF_ERR_INSTALLED
+                return $OCF_ERR_CONFIGURED
             fi
             if ! touch $OCF_RESKEY_rep_mode_conf; then
                 ocf_log err "Cannot create $OCF_RESKEY_rep_mode_conf"
-                return $OCF_ERR_INSTALLED
+                return $OCF_ERR_PERM
             fi
         fi
     fi
@@ -1459,7 +1459,7 @@ BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 
 if is_replication; then
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
-XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir_default}/PGSQL.${OCF_RESKEY_pgport_default}.xlog_note"
+XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.xlog_note"
 
 CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
 CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
