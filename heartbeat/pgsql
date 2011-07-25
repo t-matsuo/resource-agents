@@ -5,6 +5,7 @@
 #
 # Authors:      Serge Dubrouski (sergeyfd@gmail.com) -- original RA
 #               Florian Haas (florian@linbit.com) -- makeover
+#               Takatoshi MATSUO (matsuo.tak@gmail.com) -- support replication
 #
 # Copyright:    2006-2010 Serge Dubrouski <sergeyfd@gmail.com>
 #                         and other Linux-HA contributors
@@ -59,6 +60,16 @@ OCF_RESKEY_stop_escalate_default=30
 OCF_RESKEY_monitor_user_default=""
 OCF_RESKEY_monitor_password_default=""
 OCF_RESKEY_monitor_sql_default="select now();"
+# Defaults for replication
+OCF_RESKEY_rep_mode_default=none
+OCF_RESKEY_node_list_default=""
+OCF_RESKEY_restore_command_default=""
+OCF_RESKEY_master_ip_default=""
+OCF_RESKEY_stop_on_demote_default="no"
+OCF_RESKEY_primary_conninfo_opt_default=""
+OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
+OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
+OCF_RESKEY_xlog_check_count_default="3"
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -74,10 +85,21 @@ OCF_RESKEY_monitor_sql_default="select now();"
 : ${OCF_RESKEY_monitor_user=${OCF_RESKEY_monitor_user_default}}
 : ${OCF_RESKEY_monitor_password=${OCF_RESKEY_monitor_password_default}}
 : ${OCF_RESKEY_monitor_sql=${OCF_RESKEY_monitor_sql_default}}
+# for replication
+: ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
+: ${OCF_RESKEY_node_list=${OCF_RESKEY_node_list_default}}
+: ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
+: ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
+: ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
+: ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
+: ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
+: ${OCF_RESKEY_rep_mode_conf="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.rep_mode.conf"}
+: ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
+: ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
 usage() {
     cat <<EOF
-	usage: $0 start|stop|status|monitor|meta-data|validate-all|methods
+	usage: $0 start|stop|status|monitor|promote|demote|notify|meta-data|validate-all|methods
 
 	$0 manages a PostgreSQL Server as an HA resource.
 
@@ -85,6 +107,8 @@ usage() {
         The 'stop' operation stops the PostgreSQL server.
         The 'status' operation reports whether the PostgreSQL is up.
         The 'monitor' operation reports whether the PostgreSQL is running.
+        The 'promote' operations promotes the PostgreSQL server.
+        The 'demote' operations demotes the PostgreSQL server.
         The 'validate-all' operation reports whether the parameters are valid.
         The 'methods' operation reports on the methods $0 supports.
 EOF
@@ -193,7 +217,6 @@ SQL script that will be used for monitor operations.
 <content type="string" default="${OCF_RESKEY_monitor_sql_default}" />
 </parameter>
 
-
 <parameter name="config" unique="0" required="0">
 <longdesc lang="en">
 Path to the PostgreSQL configuration file for the instance
@@ -233,6 +256,104 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <shortdesc lang="en">stop escalation</shortdesc>
 <content type="integer" default="${OCF_RESKEY_stop_escalation}" />
 </parameter>
+
+<parameter name="rep_mode" unique="0" required="0">
+<longdesc lang="en">
+Replication mode(none(default)/async/sync).
+"aync","sync" require PostgreSQL 9.1 or later.
+If you use async or sync, it requires node_list, master_ip, restore_command
+parameters, and needs setting postgresql.conf, pg_hba.conf up for
+replication.
+</longdesc>
+<shortdesc lang="en">rep_mode</shortdesc>
+<content type="string" default="${OCF_RESKEY_rep_mode_default}" />
+</parameter>
+
+<parameter name="node_list" unique="0" required="0">
+<longdesc lang="en">
+All node names. Plaese separate each node with a space.
+This is required for replication.
+</longdesc>
+<shortdesc lang="en">node list</shortdesc>
+<content type="string" default="${OCF_RESKEY_node_list_default}" />
+</parameter>
+
+<parameter name="restore_command" unique="0" required="0">
+<longdesc lang="en">
+restore_command for recovery.conf
+This is required for replication.
+</longdesc>
+<shortdesc lang="en">restore_command</shortdesc>
+<content type="string" default="${OCF_RESKEY_restore_command_default}" />
+</parameter>
+
+<parameter name="master_ip" unique="0" required="0">
+<longdesc lang="en">
+Master's floating IP address to be connected from hot standby.
+This parameter used for "primary_conninfon" of recovery.conf.
+This is required for replication.
+</longdesc>
+<shortdesc lang="en">maseter ip</shortdesc>
+<content type="string" default="${OCF_RESKEY_master_ip_default}" />
+</parameter>
+
+<parameter name="stop_on_demote" unique="0" required="0">
+<longdesc lang="en">
+Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default)
+If you use yes,  monitor is failed after demote.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">stop_on_demote</shortdesc>
+<content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
+</parameter>
+
+<parameter name="primary_conninfo_opt" unique="0" required="0">
+<longdesc lang="en">
+primary_conninfo options of recovery.conf exclude  host, port, user and application_name.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">primary_conninfo_opt</shortdesc>
+<content type="string" default="${OCF_RESKEY_primary_conninfo_opt_default}" />
+</parameter>
+
+<parameter name="tmpdir" unique="0" required="0">
+<longdesc lang="en">
+Path to temporary directory.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">tmpdir</shortdesc>
+<content type="string" default="${OCF_RESKEY_tmpdir_default}" />
+</parameter>
+
+<parameter name="rep_mode_conf" unique="0" required="0">
+<longdesc lang="en">
+Path to file included from postgresq.conf to switch between async and sync.
+This parameter is used for "rep_mode=sync".
+Don't write synchronous_standby_names directive in postgresql.conf.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">rep_mode_conf</shortdesc>
+<content type="string" default="\${tmpdir}/PGSQL.\${pgport}.rep_mode.conf" />
+</parameter>
+
+<parameter name="pgctldata" unique="0" required="0">
+<longdesc lang="en">
+Path to pg_controldata command.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">pgctldata</shortdesc>
+<content type="string" default="${OCF_RESKEY_pgctldata_default}" />
+</parameter>
+
+<parameter name="xlog_check_count" unique="0" required="0">
+<longdesc lang="en">
+Number of checking xlog on monitor before promote.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">xlog check count</shortdesc>
+<content type="integer" default="${OCF_RESKEY_check_count_default}" />
+</parameter>
+
 </parameters>
 
 <actions>
@@ -240,6 +361,10 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <action name="stop" timeout="120" />
 <action name="status" timeout="60" />
 <action name="monitor" depth="0" timeout="30" interval="30"/>
+<action name="monitor" depth="0" timeout="30" interval="29" role="Master" />
+<action name="promote" timeout="120" />
+<action name="demote" timeout="120" />
+<action name="notify"   timeout="90" />
 <action name="meta-data" timeout="5" />
 <action name="validate-all" timeout="5" />
 <action name="methods" timeout="5" />
@@ -292,6 +417,9 @@ pgsql_methods() {
 	stop
 	status
 	monitor
+	promote
+	demote
+	notify
 	methods
 	meta-data
 	validate-all
@@ -299,15 +427,16 @@ EOF
 }
 
 
-#pgsql_start: Starts PostgreSQL
-pgsql_start() {
+#pgsql_real_start: Starts PostgreSQL
+pgsql_real_start() {
     local pgctl_options
     local postgres_options
     local rc
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
-        return $OCF_SUCCESS
+        pgsql_real_monitor warn
+        return $rc
     fi
 
     # Remove postmaster.pid if it exists
@@ -365,22 +494,120 @@ pgsql_start() {
 
     while :
     do
-        pgsql_monitor warn
+        pgsql_real_monitor warn
         rc=$?
-        if [ $rc -eq 0 ]; then
+        if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
             break;
         fi
         sleep 1
 	ocf_log debug "PostgreSQL still hasn't started yet. Waiting..."
     done
     ocf_log info "PostgreSQL is started."
+    return $rc
+}
 
+#pgsql_start: pgsql_real_start() wrapper for replication
+pgsql_start() {
+    local rc
+
+    if ! is_replication; then
+        pgsql_real_start
+        return $?
+    fi
+
+    # initializing for replication
+    change_pgsql_status "$HOSTNAME" "STOP"
+    $CRM_MASTER -v $CAN_NOT_PROMOTE
+    rm -f ${XLOG_NOTE_FILE}*
+    if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+        chown $OCF_RESKEY_pgdba $OCF_RESKEY_rep_mode_conf
+    fi
+    if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
+        return $OCF_ERR_GENERIC
+    fi
+
+    # start
+    pgsql_real_start
+    if [ "$?" != "$OCF_SUCCESS" ]; then
+            ocf_log warn "PostgreSQL has not started as a hot standby."
+            return $OCF_ERR_GENERIC
+    fi
+    change_pgsql_status "$HOSTNAME" "HS:alone"
     return $OCF_SUCCESS
 }
 
-#pgsql_stop: Stop PostgreSQL
-pgsql_stop() {
+#pgsql_promote: Promote PostgreSQL
+pgsql_promote() {
+    local target
     local rc
+    local output
+
+    if ! is_replication; then
+        ocf_log err "It's not replication mode."
+        return $OCF_ERR_CONFIGURED
+    fi
+    rm -f ${XLOG_NOTE_FILE}.*
+
+    for target in $OCF_RESKEY_node_list; do
+        [ "$target" = "$HOSTNAME" ] && continue
+        change_data_status "$target" "DISCONNECT"
+        change_master_score "$target" "$CAN_NOT_PROMOTE"
+    done
+
+    runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
+    while :
+    do
+        pgsql_real_monitor warn
+        rc=$?
+        if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+            break;
+        fi
+        sleep 1
+        ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
+    done
+    ocf_log info "PostgreSQL is promoted."
+
+    change_data_status "$HOSTNAME" "LATEST"
+    $CRM_MASTER -v $PROMOTE_ME
+    change_pgsql_status "$HOSTNAME" "PRI"
+    return $OCF_SUCCESS
+}
+
+#pgsql_demote: Demote PostgreSQL
+pgsql_demote() {
+    local rc
+
+    if ! is_replication; then
+        ocf_log err "It's not replication mode."
+        return $OCF_ERR_CONFIGURED
+    fi
+
+    $CRM_MASTER -v $CAN_NOT_PROMOTE
+
+    if ! pgsql_status
+    then
+        ocf_log info "PostgreSQL is already stopped on demote."
+        change_pgsql_status "$HOSTNAME" "STOP"
+        return $OCF_SUCCESS
+    fi
+
+    ocf_log info "Stopping PostgreSQL on demote."
+    pgsql_real_stop
+    rc=$?
+    if [ "$rc" -ne "$OCF_SUCCESS" ]; then
+        change_pgsql_status "$HOSTNAME" "UNKNOWN"
+        return $rc
+    fi
+    change_pgsql_status "$HOSTNAME" "STOP"
+    set_async_mode_all
+    rm -f ${XLOG_NOTE_FILE}.*
+    return $OCF_SUCCESS
+}
+
+#pgsql_real_stop: Stop PostgreSQL
+pgsql_real_stop() {
+    local rc
+    local count
 
     if ! pgsql_status
     then
@@ -413,7 +640,7 @@ pgsql_stop() {
 
     while :
     do
-        pgsql_monitor
+        pgsql_real_monitor
         rc=$?
         if [ $rc -eq $OCF_NOT_RUNNING ]; then
             # An unnecessary debug log is prevented.
@@ -426,6 +653,37 @@ pgsql_stop() {
     # Remove postmaster.pid if it exists
     rm -f $PIDFILE
 
+    return $OCF_SUCCESS
+}
+
+#pgsql_stop: pgsql_real_stop() wrapper for replication
+pgsql_stop() {
+    local rc
+
+    if ! is_replication; then
+        pgsql_real_stop
+        return $?
+    fi
+
+    $CRM_MASTER -v $CAN_NOT_PROMOTE
+    delete_xlog_replay_location
+
+    if ! pgsql_status
+    then
+        ocf_log info "PostgreSQL is already stopped."
+        change_pgsql_status "$HOSTNAME" "STOP"
+        return $OCF_SUCCESS
+    fi
+
+    pgsql_real_stop
+    rc=$?
+    if [ $rc -ne $OCF_SUCCESS ]; then
+        change_pgsql_status "$HOSTNAME" "UNKNOWN"
+        return $rc
+    fi
+
+    change_pgsql_status "$HOSTNAME" "STOP"
+    set_async_mode_all
     return $OCF_SUCCESS
 }
 
@@ -446,13 +704,14 @@ pgsql_status() {
 }
 
 #
-# pgsql_monitor
+# pgsql_real_monitor
 #
 
-pgsql_monitor() {
+pgsql_real_monitor() {
     local loglevel
     local psql_options
     local rc
+    local output
 
     # Set the log level of the error message
     loglevel=${1:-err}
@@ -479,10 +738,15 @@ pgsql_monitor() {
        fi
     fi
 
-    OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
-    runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
+    if ! is_replication; then
+        OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
+        runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
+        rc=$?
+    else
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc '$CHECK_MS_SQL'" 2>&1`
+        rc=$?
+    fi
 
-    rc=$?
     if [ $rc -ne  0 ]; then
 	ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
         if [ $rc -eq 1 ]; then
@@ -495,7 +759,551 @@ pgsql_monitor() {
 	return $OCF_ERR_GENERIC
     fi
 
+    if is_replication; then
+        case "$output" in
+            f)  ocf_log debug "PostgreSQL is running as a primary."
+                return $OCF_RUNNING_MASTER;;
+
+            t)  ocf_log debug "PostgreSQL is running as a hot standby."
+                return $OCF_SUCCESS;;
+
+            *)  ocf_log err "$CHECK_MS_SQL output is $output"
+                return $OCF_ERR_GENERIC;;
+        esac
+    fi
+
     return $OCF_SUCCESS
+}
+
+#pgsql_stop: pgsql_real_monitor() wrapper for replication
+pgsql_monitor() {
+    local rc
+    local rsc
+    local instance
+    local my_status
+    local data_status
+    local is_master=""
+
+    pgsql_real_monitor
+    rc=$?
+    if ! is_replication; then
+        return $rc
+    fi
+    if [ "$rc" != $OCF_SUCCESS ] && [ "$rc" != "$OCF_RUNNING_MASTER" ]; then
+        return $rc
+    fi
+
+    # If I am Master
+    if [ "$rc" = "$OCF_RUNNING_MASTER" ]; then
+        change_data_status "$HOSTNAME" "LATEST"
+        change_pgsql_status "$HOSTNAME" "PRI"
+        control_slave_status || return $OCF_ERR_GENERIC
+        return $rc
+    fi
+
+    # I can't get master node name from $OCF_RESKEY_CRM_meta_notify_master_uname on monito,
+    # so I will get master node name using crm_mon -n
+    if output=`crm_mon -n1 | grep " Master"`; then
+        rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+        instance=0
+        while :
+        do
+            if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+                break
+            fi
+            if echo "$output" | grep "${rsc}:${instance}"; then
+                is_master="yes"
+                break
+            fi
+            instance=`expr $instance + 1`
+        done
+    fi
+
+    if [ ! -n "$is_master" ]; then
+        # If I am Slave and Master is not exist
+        ocf_log info "Master is not exist."
+        change_pgsql_status "$HOSTNAME" "HS:alone"
+        is_master_right
+        if [ "$?" = "0" ]; then
+            rm -f ${XLOG_NOTE_FILE}.$count
+        fi
+    else
+        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+        if [ "$output" = "DISCONNECT" ]; then
+            change_pgsql_status "$HOSTNAME" "HS:alone"
+        fi
+    fi
+    return $rc
+}
+
+#pgsql_post_demote: start PostgreSQL to transit from master to slave
+pgsql_post_demote() {
+    local my_fail_count
+
+    DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
+    ocf_log debug "post-demote called.(Demote uname is $DEMOTE_NODE)"
+
+    # I start pgsql on post_demote()
+    # because if it's failed starting pgsql on demote, node is fenced.
+    if [ "$DEMOTE_NODE" = "$HOSTNAME" ]; then
+        if [ "$OCF_RESKEY_stop_on_demote" != "no" ]; then
+            ocf_log info "I don't restart on post-demote because of stop_on_demote=$OCF_RESKEY_stop_on_demote."
+            return $OCF_SUCCESS
+        fi
+
+        my_fail_count=`$CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -N $HOSTNAME -G -Q | sed "s/INFINITY/1000000/g"`
+        if [ "$my_fail_count" != "0" ]; then
+            ocf_log info "My fail-count=$my_fail_count, so I don't start on post-demote."
+            return $OCF_SUCCESS
+        fi
+
+        if ! make_recovery_conf; then
+            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
+            return $OCF_ERR_GENERIC
+        fi
+
+        set_async_mode_all
+        pgsql_real_start
+        if [ $? -ne $OCF_SUCCESS ]; then
+            ocf_log err "Cannot start PostgreSQL as a hot standby on post-demote."
+            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
+            return $OCF_ERR_GENERIC
+        fi
+        change_pgsql_status "$HOSTNAME" "HS:alone"
+        return $OCF_SUCCESS
+    fi
+
+    change_pgsql_status "$HOSTNAME" "HS:alone"
+    return $OCF_SUCCESS
+}
+
+pgsql_notify() {
+    local type="${OCF_RESKEY_CRM_meta_notify_type}"
+    local op="${OCF_RESKEY_CRM_meta_notify_operation}"
+    local rc
+
+    ocf_log debug "notify: ${type} for ${op}"
+    case $type in
+        post)
+            case $op in
+                promote)
+                    delete_xlog_replay_location
+                    return $?
+                    ;;
+                demote)
+                    pgsql_post_demote
+                    return $?
+                    ;;
+                start|stop)
+                    if [ "$HOSTNAME " = "$OCF_RESKEY_CRM_meta_notify_master_uname" ]; then
+                        control_slave_status
+                    fi
+                    return $OCF_SUCCESS
+                    ;;
+            esac
+            ;;
+    esac
+    return $OCF_SUCCESS
+}
+
+control_slave_status() {
+    local data_status
+    local target
+    local all_data_status
+    local node_number
+    local node_name
+
+    if all_data_status=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
+        if [ -n "$all_data_status" ]; then
+            node_number=`echo -e "$all_data_status" | wc -l`
+            all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
+        fi
+    else
+        ocf_log warn "psql err."
+        all_data_status=""
+    fi
+
+    for target in $OCF_RESKEY_node_list; do
+        if [ "$target" = "$HOSTNAME" ]; then
+            continue
+        fi
+
+        data_status="DISCONNECT"
+        if [ -n "$all_data_status" ]; then
+            for index in `seq $node_number`; do
+                node_name=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 1`
+                state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 2`
+                sync_state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 3`
+                ocf_log debug "node=$node_name, state=$state, sync_state=$sync_state"
+                if [ "$node_name" = "$target" ];then
+                    data_status="$state|$sync_state"
+                    break
+                fi
+            done
+        fi
+
+        case "$data_status" in
+            "STREAMING|SYNC")
+                change_data_status "$target" "$data_status"
+                change_master_score "$target" "$CAN_PROMOTE"
+                change_pgsql_status "$target" "HS:sync"
+                ;;
+            "STREAMING|ASYNC")
+                change_data_status "$target" "$data_status"
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+                    change_master_score "$target" "$CAN_NOT_PROMOTE"
+                    if ! is_sync_mode "$target"; then
+                        set_sync_mode "$target"
+                    fi
+                else
+                    change_data_status "$target" "$data_status"
+                    change_master_score "$target" "$CAN_PROMOTE"
+                fi
+                change_pgsql_status "$target" "HS:async"
+                ;;
+            "STREAMING|POTENTIAL")
+                change_data_status "$target" "$data_status"
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
+                change_pgsql_status "$target" "HS:potential"
+                ;;
+            "DISCONNECT")
+                change_data_status "$target" "$data_status"
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && is_sync_mode "$target"; then
+                    set_async_mode "$target"
+                fi
+                ;;
+            *)
+                change_data_status "$target" "$data_status"
+                change_master_score "$target" "$CAN_NOT_PROMOTE"
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && is_sync_mode "$target"; then
+                    set_async_mode "$target"
+                fi
+                change_pgsql_status "$target" "HS:connected"
+                ;;
+        esac
+    done
+    return 0
+}
+
+is_master_right() {
+    local rc
+    local old
+    local new
+    local output
+    local data_status
+    local node
+    local mylocation
+    local count
+    local newestXlog
+    local oldfile
+    local newfile
+
+    ocf_log debug "Checking right of master."
+
+    data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+    if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "LATEST" ]; then
+            ocf_log warn "My data is out-of-date. status=$data_status"
+            return 1
+        fi
+    else
+        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "STREAMING|ASYNC" ] && [ "$data_status" != "LATEST" ]; then
+            ocf_log warn "My data is out-of-date. status=$data_status"
+            return 1
+        fi
+    fi
+    ocf_log info "My data status=$data_status."
+
+    old=1
+    new=1
+    for count in `seq $OCF_RESKEY_xlog_check_count`; do
+       if [ -f ${XLOG_NOTE_FILE}.$count ]; then
+           old=$count
+           continue
+       fi
+       new=$count
+       break
+    done
+
+    show_xlog_replay_location
+    if [ "$?" != "0" ]; then
+        ocf_log err "Failed showing my xlog replay location."
+        exit $OCF_ERR_GENERIC
+    fi
+
+    # get xlog replay locations of all nodes
+    for node in ${OCF_RESKEY_node_list}; do
+        output=`$CRM_ATTR_REBOOT --type nodes -N $node --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log warn "Cannot get $node xlog replay location."
+            continue
+        else
+            ocf_log info "$node xlog replay location : $output"
+            echo "$node $output" >> ${XLOG_NOTE_FILE}.${new}
+            if [ "$node" = "$HOSTNAME" ]; then
+                mylocation=$output
+            fi
+        fi
+    done
+
+    if [ "$old" = "$new" ]; then
+        return 1
+    fi
+
+    if [ "$new" = "$OCF_RESKEY_xlog_check_count" ]; then
+       newestXlog=`cat ${XLOG_NOTE_FILE}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
+       if [ "$newestXlog" = "$mylocation" ]; then
+           ocf_log info "I have a master right."
+           $CRM_MASTER -v $PROMOTE_ME
+           return 0
+       fi
+       change_data_status "$HOSTNAME" "DISCONNECT"
+       ocf_log info "I don't have a master right."
+    else
+        oldfile=`cat ${XLOG_NOTE_FILE}.${old}`
+        newfile=`cat ${XLOG_NOTE_FILE}.${new}`
+        if [ "$oldfile" != "$newfile" ]; then
+            # reset counter
+            rm -f ${XLOG_NOTE_FILE}.*
+            echo -e "$newfile" > ${XLOG_NOTE_FILE}.1
+        fi
+    fi
+    return 1
+}
+
+is_replication() {
+    if [ "$OCF_RESKEY_rep_mode" != "none" ]; then
+        return 0
+    fi
+    return 1
+}
+
+show_xlog_replay_location() {
+    local output
+    local rc
+    local output1
+    local output2
+    local log1
+    local log2
+
+    output=`su ${OCF_RESKEY_pgdba} -c "cd ${OCF_RESKEY_pgdata}; ${OCF_RESKEY_psql} -U ${OCF_RESKEY_pgdba} -p ${OCF_RESKEY_pgport} -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
+    rc=$?
+    if [ "$rc" != "0" ]; then
+        ocf_log err "Cannot get my xlog replay location."
+        return $rc
+    fi
+
+    output1=`echo "$output" | cut -d "/" -f 1`
+    output2=`echo "$output" | cut -d "/" -f 2`
+    log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
+    log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
+    ocf_log info "My xlog replay location : ${log1}/${log2}"
+    echo "${log1}${log2}"
+
+    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
+    return $?
+}
+
+delete_xlog_replay_location() {
+    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+    return $?
+}
+
+set_async_mode_all() {
+    [ "$OCF_RESKEY_rep_mode" = "sync" ] || return 0
+    ocf_log info "Setup all nodes as an async."
+    echo "" > "$OCF_RESKEY_rep_mode_conf" || return 1
+    if [ "$?" != "0" ]; then
+        ocf_log err "Cannot setup all nodes as an async mode."
+        return 1
+    fi
+    return 0
+}
+
+set_async_mode() {
+    local sync_node_in_conf
+
+    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    if [ -n "$sync_node_in_conf" ]; then
+        echo "1=$1, conf=$sync_node_in_conf" 1>&2
+        if ! echo $sync_node_in_conf | grep "$1"; then
+            ocf_log info "$1 is already async mode."
+            return 0
+        else
+            ocf_log info "Setup $1 as an async mode."
+            sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |  sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
+            if [ -n $sync_node_in_conf ]; then
+                echo "synchronous_standby_names = '$sync_node_in_conf'" > "$OCF_RESKEY_rep_mode_conf"
+            else
+                echo "" > "$OCF_RESKEY_rep_mode_conf"
+            fi
+        fi
+    else
+        ocf_log info "$1 is already async mode."
+        return 0
+    fi
+
+    ocf_log info "All synced nodes : \"$sync_node_in_conf\""
+    reload_conf
+    return $?
+}
+
+set_sync_mode() {
+    local sync_node_in_conf
+
+    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    if [ -n "$sync_node_in_conf" ]; then
+        if echo "$sync_node_in_conf" | grep "$1"; then
+            ocf_log info "$1 is already sync mode."
+            return 0
+        else
+            ocf_log info "Setup $1 as a sync mode."
+            echo "synchronous_standby_names = '$sync_node_in_conf,$1'" > "$OCF_RESKEY_rep_mode_conf"
+        fi
+    else
+        ocf_log info "Setup $1 as a sync mode."
+        echo "synchronous_standby_names = '$1'" > "$OCF_RESKEY_rep_mode_conf"
+    fi
+
+    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    ocf_log info "All synced nodes : \"$sync_node_in_conf\""
+    reload_conf
+    return $?
+}
+
+is_sync_mode() {
+    local target
+
+    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2 | sed "s/,/ /g"`
+    if [ -n "$sync_node_in_conf" ]; then
+        for target in $sync_node_in_conf; do
+            if [ "$target" = "$1" ];then
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
+reload_conf() {
+    # Set options passed to pg_ctl
+    pgctl_options="$OCF_RESKEY_ctl_opt -D $OCF_RESKEY_pgdata -l $OCF_RESKEY_logfile"
+
+    # Set options passed to the PostgreSQL server process
+    postgres_options=""
+    if [ -n "$OCF_RESKEY_config" ]; then
+    postgres_options="$postgres_options -c config_file=${OCF_RESKEY_config}"
+    fi
+    if [ -n "$OCF_RESKEY_pghost" ]; then
+    postgres_options="$postgres_options -h $OCF_RESKEY_pghost"
+    fi
+    if [ -n "$OCF_RESKEY_start_opt" ]; then
+    postgres_options="$postgres_options $OCF_RESKEY_start_opt"
+    fi
+
+    # Tack pass-through options onto pg_ctl options
+    if [ -n "$postgres_options" ]; then
+    pgctl_options="$pgctl_options -o '$postgres_options'"
+    fi
+
+    # Invoke pg_ctl
+    runasowner "$OCF_RESKEY_pgctl $pgctl_options reload"
+    if [ $? -eq 0 ]; then
+        ocf_log info "Reload configuration file."
+    else
+        ocf_log err "Cannot reload configuration file."
+        return 1
+    fi
+
+    return 0
+}
+
+make_recovery_conf() {
+    local node
+    local node_number
+
+    touch $RECOVERY_CONF
+    if ! chown $OCF_RESKEY_pgdba $RECOVERY_CONF; then
+        ocf_log info "Cannot create recovery.conf"
+        return 1
+    fi
+
+cat > $RECOVERY_CONF <<END
+standby_mode = 'on'
+primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
+restore_command = '$OCF_RESKEY_restore_command'
+recovery_target_timeline='latest'
+END
+
+    ocf_log info "Created recovery.conf. host=${OCF_RESKEY_master_ip}"
+    return 0
+}
+
+# change pgsql-status.
+# arg1:node, arg2: value
+change_pgsql_status() {
+    local output
+    output=`$CRM_ATTR_REBOOT -N $1 -n $PGSQL_STATUS_ATTR -G -q`
+    if [ "$output" != "$2" ]; then
+        ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
+        $CRM_ATTR_REBOOT -N $1 -n "$PGSQL_STATUS_ATTR" -v "$2"
+        if [ "$?" != "0" ]; then
+            ocf_log err "FATAL : Cannot change $PGSQL_STATUS_ATTR"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# change pgsql-data-status.
+# arg1:node, arg2: value
+change_data_status() {
+    local output
+    output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+    if [ "$output" != "$2" ]; then
+        ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
+        $CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" --attr-value "$2"
+        if [ "$?" != "0" ]; then
+            ocf_log err "FATAL : Cannot change $PGSQL_DATA_STATUS_ATTR"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# change master-score
+# arg1:node, arg2: score
+change_master_score() {
+    local rsc
+    local instance
+    local current_score
+
+    rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+    instance=0
+    while :
+    do
+        if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+            break
+        fi
+        if [ "${rsc}:${instance}" = "$OCF_RESOURCE_INSTANCE" ]; then
+            instance=`expr $instance + 1`
+            continue
+        fi
+
+        current_score=`$CRM_ATTR_REBOOT -N $1 -n master-${rsc}:${instance} -G -q 2>/dev/null`
+        if [ "$current_score" != "$2" ]; then
+            ocf_log info "Changing ${rsc}:${instance} master score on $1 : $current_score->$2."
+            $CRM_ATTR_REBOOT -N $target -n master-${rsc}:${instance} -v "$2"
+            if [ "$?" != "0" ]; then
+                ocf_log err "FATAL : Cannot change master score."
+                return 1
+            fi
+        fi
+        instance=`expr $instance + 1`
+    done
+    return 0
 }
 
 check_binary2() {
@@ -559,6 +1367,41 @@ pgsql_validate_all() {
     then
         ocf_log err "monitor_user has to be set if monitor_password is set"
         return $OCF_ERR_CONFIGURED
+    fi
+
+    if is_replication; then
+        if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
+            ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
+            return $OCF_ERR_PERM
+        fi
+        if [ ! -n "$OCF_RESKEY_master_ip" ]; then
+            ocf_log err "master_ip can't be empty"
+            return $OCF_ERR_CONFIGURED
+        fi
+        if [ ! -n "$OCF_RESKEY_node_list" ]; then
+            ocf_log err "node_list can't be empty"
+            return $OCF_ERR_CONFIGURED
+        fi
+        if [ ! -n "$OCF_RESKEY_restore_command" ]; then
+            ocf_log err "restore_command can't be empty"
+            return $OCF_ERR_CONFIGURED
+        fi
+        if ! check_binary2 "$OCF_RESKEY_pgctldata" ||
+           ! check_binary2 "${HA_SBIN_DIR}/crm_attribute" ||
+           ! check_binary2 "${HA_SBIN_DIR}/attrd_updater" ||
+           ! check_binary2 "${HA_SBIN_DIR}/crm_failcount"; then
+            return $OCF_ERR_INSTALLED
+        fi
+
+        if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+            if [ ! -n "$OCF_RESKEY_rep_mode_conf" ]; then
+                return $OCF_ERR_CONFIGURED
+            fi
+            if ! touch $OCF_RESKEY_rep_mode_conf; then
+                ocf_log err "Cannot create $OCF_RESKEY_rep_mode_conf"
+                return $OCF_ERR_PERM
+            fi
+        fi
     fi
 
     return $OCF_SUCCESS
@@ -630,6 +1473,31 @@ fi
 PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 
+if is_replication; then
+RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
+XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.xlog_note"
+
+CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
+CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
+CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
+CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
+ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
+
+CAN_NOT_PROMOTE="-INFINITY"
+CAN_PROMOTE="100"
+PROMOTE_ME="1000"
+
+CHECK_MS_SQL="select pg_is_in_recovery();"
+CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
+CHECK_REPLICATION_STATE_SQL="select application_name,state,sync_state from pg_stat_replication"
+
+PGSQL_STATUS_ATTR="pgsql-status"
+PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
+PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
+
+HOSTNAME=`uname -n`
+fi
+
 case "$1" in
     methods)    pgsql_methods
                 exit $?;;
@@ -679,6 +1547,15 @@ case "$1" in
                 exit $?;;
 
     start)      pgsql_start
+                exit $?;;
+
+    promote)    pgsql_promote
+                exit $?;;
+
+    demote)     pgsql_demote
+                exit $?;;
+
+    notify)     pgsql_notify
                 exit $?;;
 
     stop)       pgsql_stop
