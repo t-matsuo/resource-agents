@@ -778,12 +778,14 @@ pgsql_real_monitor() {
 #pgsql_stop: pgsql_real_monitor() wrapper for replication
 pgsql_monitor() {
     local rc
+    local rsc
+    local instance
     local my_status
     local data_status
+    local is_master=""
 
     pgsql_real_monitor
     rc=$?
-
     if ! is_replication; then
         return $rc
     fi
@@ -793,17 +795,31 @@ pgsql_monitor() {
 
     # If I am Master
     if [ "$rc" = "$OCF_RUNNING_MASTER" ]; then
-        MASTER=$HOSTNAME
         change_data_status "$HOSTNAME" "LATEST"
         change_pgsql_status "$HOSTNAME" "PRI"
         control_slave_status || return $OCF_ERR_GENERIC
         return $rc
     fi
 
-    # hmm... I can't get master name on monitor. It's bug ...
-    # http://developerbugs.linux-foundation.org/show_bug.cgi?id=2607
-    MASTER=`crm_mon -1 | grep "Masters: \[" | tr -s " " | cut -d " " -f 4`
-    if [ ! -n "$MASTER" ]; then
+    # I can't get master node name from $OCF_RESKEY_CRM_meta_notify_master_uname on monito,
+    # so I will get master node name using crm_mon -n
+    if output=`crm_mon -n1 | grep " Master"`; then
+        rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+        instance=0
+        while :
+        do
+            if [ "$instance" -ge "$OCF_RESKEY_CRM_meta_clone_max" ]; then
+                break
+            fi
+            if echo "$output" | grep "${rsc}:${instance}"; then
+                is_master="yes"
+                break
+            fi
+            instance=`expr $instance + 1`
+        done
+    fi
+
+    if [ ! -n "$is_master" ]; then
         # If I am Slave and Master is not exist
         ocf_log info "Master is not exist."
         change_pgsql_status "$HOSTNAME" "HS:alone"
@@ -879,7 +895,7 @@ pgsql_notify() {
                     return $?
                     ;;
                 start|stop)
-                    if [ "$HOSTNAME" = "$MASTER" ]; then
+                    if [ "$HOSTNAME " = "$OCF_RESKEY_CRM_meta_notify_master_uname" ]; then
                         control_slave_status
                     fi
                     return $OCF_SUCCESS
@@ -1480,12 +1496,6 @@ PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
 PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
 HOSTNAME=`uname -n`
-MASTER=""
-
-# We can't get a master_uname correctly on monitor correctly :-<
-if [ "$OCF_RESKEY_CRM_meta_notify_master_uname" != " " ] && [ "$1" != "monitor" ]; then
-    MASTER=`echo $OCF_RESKEY_CRM_meta_notify_master_uname | sed "s/ /\n/g" | head -1`
-fi
 fi
 
 case "$1" in
