@@ -840,7 +840,7 @@ pgsql_monitor() {
             rm -f ${XLOG_NOTE_FILE}.$count
         fi
     else
-        output=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+        output=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
             change_pgsql_status "$HOSTNAME" "HS:alone"
         fi
@@ -1013,7 +1013,7 @@ is_master_right() {
 
     ocf_log debug "Checking right of master."
 
-    data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+    data_status=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
         if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
@@ -1046,7 +1046,7 @@ is_master_right() {
 
     # get xlog replay locations of all nodes
     for node in ${OCF_RESKEY_node_list}; do
-        output=`$CRM_ATTR_REBOOT --type nodes -N $node --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
+        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
         rc=$?
         if [ "$rc" != "0" ]; then
             ocf_log warn "Cannot get $node xlog replay location."
@@ -1114,12 +1114,12 @@ show_xlog_replay_location() {
     ocf_log info "My xlog replay location : ${log1}/${log2}"
     echo "${log1}${log2}"
 
-    $CRM_ATTR_REBOOT --type nodes -N $HOSTNAME --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -v "${log1}${log2}"
     return $?
 }
 
 delete_xlog_replay_location() {
-    $CRM_ATTR_REBOOT --type nodes -N $HOSTNAME --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
     return $?
 }
 
@@ -1237,10 +1237,10 @@ END
 # arg1:node, arg2: value
 change_pgsql_status() {
     local output
-    output=`$CRM_ATTR_REBOOT -N $1 -n $PGSQL_STATUS_ATTR -G -q`
+    output=`$CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -G -q`
     if [ "$output" != "$2" ]; then
         ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
-        $CRM_ATTR_REBOOT -N $1 -n "$PGSQL_STATUS_ATTR" -v "$2"
+        $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -v "$2"
         if [ "$?" != "0" ]; then
             ocf_log err "FATAL : Cannot change $PGSQL_STATUS_ATTR"
             return 1
@@ -1253,10 +1253,10 @@ change_pgsql_status() {
 # arg1:node, arg2: value
 change_data_status() {
     local output
-    output=`$CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
+    output=`$CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$output" != "$2" ]; then
         ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
-        $CRM_ATTR_FOREVER --type nodes -N $1 --attr-name "$PGSQL_DATA_STATUS_ATTR" --attr-value "$2"
+        $CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -v "$2"
         if [ "$?" != "0" ]; then
             ocf_log err "FATAL : Cannot change $PGSQL_DATA_STATUS_ATTR"
             return 1
@@ -1284,10 +1284,10 @@ change_master_score() {
             continue
         fi
 
-        current_score=`$CRM_ATTR_REBOOT -N $1 -n master-${rsc}:${instance} -G -q 2>/dev/null`
+        current_score=`$CRM_ATTR_REBOOT -N "$1" -n "master-${rsc}:${instance}" -G -q 2>/dev/null`
         if [ "$current_score" != "$2" ]; then
             ocf_log info "Changing ${rsc}:${instance} master score on $1 : $current_score->$2."
-            $CRM_ATTR_REBOOT -N $target -n master-${rsc}:${instance} -v "$2"
+            $CRM_ATTR_REBOOT -N "$target" -n "master-${rsc}:${instance}" -v "$2"
             if [ "$?" != "0" ]; then
                 ocf_log err "FATAL : Cannot change master score."
                 return 1
