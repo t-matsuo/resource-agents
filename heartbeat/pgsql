@@ -1102,12 +1102,12 @@ show_xlog_replay_location() {
     ocf_log info "My xlog replay location : ${log1}/${log2}"
     echo "${log1}${log2}"
 
-    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
+    $CRM_ATTR_REBOOT --type nodes -N $HOSTNAME --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" --attr-value "${log1}${log2}"
     return $?
 }
 
 delete_xlog_replay_location() {
-    $CRM_ATTR_REBOOT --type nodes -N `uname -n` --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+    $CRM_ATTR_REBOOT --type nodes -N $HOSTNAME --attr-name "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
     return $?
 }
 
