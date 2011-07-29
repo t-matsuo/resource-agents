@@ -1370,6 +1370,11 @@ pgsql_validate_all() {
     fi
 
     if is_replication; then
+        if ! ocf_is_ms; then
+            ocf_log err "Replication requires Master/Slave configuration"
+            return $OCF_ERR_CONFIGURED
+        fi
+
         if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
             return $OCF_ERR_PERM
