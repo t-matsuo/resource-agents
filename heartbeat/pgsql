@@ -107,8 +107,8 @@ usage() {
         The 'stop' operation stops the PostgreSQL server.
         The 'status' operation reports whether the PostgreSQL is up.
         The 'monitor' operation reports whether the PostgreSQL is running.
-        The 'promote' operations promotes the PostgreSQL server.
-        The 'demote' operations demotes the PostgreSQL server.
+        The 'promote' operation promotes the PostgreSQL server.
+        The 'demote' operation demotes the PostgreSQL server.
         The 'validate-all' operation reports whether the parameters are valid.
         The 'methods' operation reports on the methods $0 supports.
 EOF
@@ -271,7 +271,7 @@ replication.
 
 <parameter name="node_list" unique="0" required="0">
 <longdesc lang="en">
-All node names. Plaese separate each node with a space.
+All node names. Please separate each node with a space.
 This is required for replication.
 </longdesc>
 <shortdesc lang="en">node list</shortdesc>
@@ -290,16 +290,16 @@ This is required for replication.
 <parameter name="master_ip" unique="0" required="0">
 <longdesc lang="en">
 Master's floating IP address to be connected from hot standby.
-This parameter used for "primary_conninfon" of recovery.conf.
+This parameter used for "primary_conninfo" of recovery.conf.
 This is required for replication.
 </longdesc>
-<shortdesc lang="en">maseter ip</shortdesc>
+<shortdesc lang="en">master ip</shortdesc>
 <content type="string" default="${OCF_RESKEY_master_ip_default}" />
 </parameter>
 
 <parameter name="stop_on_demote" unique="0" required="0">
 <longdesc lang="en">
-Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default)
+Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default))
 If you use yes,  monitor is failed after demote.
 This is optional for replication.
 </longdesc>
@@ -327,7 +327,7 @@ This is optional for replication.
 
 <parameter name="rep_mode_conf" unique="0" required="0">
 <longdesc lang="en">
-Path to file included from postgresq.conf to switch between async and sync.
+Path to file included from postgresql.conf to switch between async and sync.
 This parameter is used for "rep_mode=sync".
 Don't write synchronous_standby_names directive in postgresql.conf.
 This is optional for replication.
