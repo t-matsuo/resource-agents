@@ -1403,10 +1403,7 @@ pgsql_validate_all() {
             ocf_log err "restore_command can't be empty"
             return $OCF_ERR_CONFIGURED
         fi
-        if ! check_binary2 "$OCF_RESKEY_pgctldata" ||
-           ! check_binary2 "${HA_SBIN_DIR}/crm_attribute" ||
-           ! check_binary2 "${HA_SBIN_DIR}/attrd_updater" ||
-           ! check_binary2 "${HA_SBIN_DIR}/crm_failcount"; then
+        if ! check_binary2 "$OCF_RESKEY_pgctldata"; then
             return $OCF_ERR_INSTALLED
         fi
 
