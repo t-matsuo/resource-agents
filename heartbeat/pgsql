@@ -1200,28 +1200,8 @@ is_sync_mode() {
 }
 
 reload_conf() {
-    # Set options passed to pg_ctl
-    pgctl_options="$OCF_RESKEY_ctl_opt -D $OCF_RESKEY_pgdata -l $OCF_RESKEY_logfile"
-
-    # Set options passed to the PostgreSQL server process
-    postgres_options=""
-    if [ -n "$OCF_RESKEY_config" ]; then
-    postgres_options="$postgres_options -c config_file=${OCF_RESKEY_config}"
-    fi
-    if [ -n "$OCF_RESKEY_pghost" ]; then
-    postgres_options="$postgres_options -h $OCF_RESKEY_pghost"
-    fi
-    if [ -n "$OCF_RESKEY_start_opt" ]; then
-    postgres_options="$postgres_options $OCF_RESKEY_start_opt"
-    fi
-
-    # Tack pass-through options onto pg_ctl options
-    if [ -n "$postgres_options" ]; then
-    pgctl_options="$pgctl_options -o '$postgres_options'"
-    fi
-
     # Invoke pg_ctl
-    runasowner "$OCF_RESKEY_pgctl $pgctl_options reload"
+    runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata reload"
     if [ $? -eq 0 ]; then
         ocf_log info "Reload configuration file."
     else
