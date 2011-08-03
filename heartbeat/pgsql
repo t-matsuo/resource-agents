@@ -65,6 +65,7 @@ OCF_RESKEY_rep_mode_default=none
 OCF_RESKEY_node_list_default=""
 OCF_RESKEY_restore_command_default=""
 OCF_RESKEY_master_ip_default=""
+OCF_RESKEY_repuser_default="postgres"
 OCF_RESKEY_stop_on_demote_default="no"
 OCF_RESKEY_primary_conninfo_opt_default=""
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
@@ -90,6 +91,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_node_list=${OCF_RESKEY_node_list_default}}
 : ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
+: ${OCF_RESKEY_repuser=${OCF_RESKEY_repuser_default}}
 : ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
 : ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
@@ -295,6 +297,16 @@ This is required for replication.
 </longdesc>
 <shortdesc lang="en">master ip</shortdesc>
 <content type="string" default="${OCF_RESKEY_master_ip_default}" />
+</parameter>
+
+<parameter name="repuser" unique="0" required="0">
+<longdesc lang="en">
+User used to connect to the master server.
+This parameter is used for "primary_conninfo" in recovery.conf.
+This is required for replication.
+</longdesc>
+<shortdesc lang="en">repuser</shortdesc>
+<content type="string" default="${OCF_RESKEY_repuser_default}" />
 </parameter>
 
 <parameter name="stop_on_demote" unique="0" required="0">
@@ -1232,12 +1244,12 @@ make_recovery_conf() {
 
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
-primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_pgdba} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
+primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '$OCF_RESKEY_restore_command'
 recovery_target_timeline='latest'
 END
 
-    ocf_log info "Created recovery.conf. host=${OCF_RESKEY_master_ip}"
+    ocf_log info "Created recovery.conf. host=${OCF_RESKEY_master_ip}, user=${OCF_RESKEY_repuser}"
     return 0
 }
 
