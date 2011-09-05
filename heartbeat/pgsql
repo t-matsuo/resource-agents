@@ -801,7 +801,7 @@ pgsql_monitor() {
     if ! is_replication; then
         return $rc
     fi
-    if [ "$rc" != $OCF_SUCCESS ] && [ "$rc" != "$OCF_RUNNING_MASTER" ]; then
+    if [ "$rc" != $OCF_SUCCESS -a "$rc" != "$OCF_RUNNING_MASTER" ]; then
         return $rc
     fi
 
@@ -1015,12 +1015,12 @@ is_master_right() {
 
     data_status=`$CRM_ATTR_FOREVER --type nodes -N $HOSTNAME --attr-name "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "LATEST" ]; then
+        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
     else
-        if [ -n "$data_status" ] && [ "$data_status" != "STREAMING|SYNC" ] && [ "$data_status" != "STREAMING|ASYNC" ] && [ "$data_status" != "LATEST" ]; then
+        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a "$data_status" != "STREAMING|ASYNC" -a "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
