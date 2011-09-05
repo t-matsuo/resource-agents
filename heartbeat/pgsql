@@ -455,7 +455,7 @@ pgsql_real_start() {
     rm -f $PIDFILE
 
     # Remove backup_label if it exists
-    if [ -f $BACKUPLABEL ]; then
+    if [ -f $BACKUPLABEL ] && ! is_replication; then
 	ocf_log info "Removing $BACKUPLABEL. The previous backup might have failed."
 	rm -f $BACKUPLABEL
     fi
