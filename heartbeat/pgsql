@@ -96,6 +96,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_rep_mode_conf="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.rep_mode.conf"}
+: ${OCF_RESKEY_force_start_file="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.force_start"}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
@@ -348,6 +349,16 @@ This is optional for replication.
 <content type="string" default="\${tmpdir}/PGSQL.\${pgport}.rep_mode.conf" />
 </parameter>
 
+<parameter name="force_start_file" unique="0" required="0">
+<longdesc lang="en">
+Path to flag file to force to start PostgreSQL
+regardless of "Database cluster state".
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">force start file</shortdesc>
+<content type="string" default="\${tmpdir}/PGSQL.\${pgport}.force_start" />
+</parameter>
+
 <parameter name="pgctldata" unique="0" required="0">
 <longdesc lang="en">
 Path to pg_controldata command.
@@ -444,6 +455,7 @@ pgsql_real_start() {
     local pgctl_options
     local postgres_options
     local rc
+    local cluster_state
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
@@ -458,6 +470,22 @@ pgsql_real_start() {
     if [ -f $BACKUPLABEL ] && ! is_replication; then
 	ocf_log info "Removing $BACKUPLABEL. The previous backup might have failed."
 	rm -f $BACKUPLABEL
+    fi
+
+    # If database cluster state is "in production" or "shutting down" or "unrecognized status code",
+    # my data may be inconsistent, so I prohibit PostgreSQL from starting.
+    if is_replication; then
+        cluster_state=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep "Database cluster state:" | sed -e "s/Database cluster state: *//g"`
+        ocf_log info "Database cluster state is \"$cluster_state\"."
+        if [ -f $OCF_RESKEY_force_start_file ]; then
+            ocf_log info "$OCF_RESKEY_force_start_file file is exist. PostgreSQL is forced to start."
+        else
+            echo $cluster_state |  grep -q -e "in production" -e "shutting down" -e "unrecognized status code"
+            if [ "$?" = "0" ]; then
+                ocf_log warn "PostgreSQL is prohibited from starting. You have to create $OCF_RESKEY_force_start_file file to force to start."
+                return $OCF_ERR_GENERIC
+            fi
+        fi
     fi
 
     # Check if we need to create a log file
@@ -514,6 +542,10 @@ pgsql_real_start() {
         sleep 1
 	ocf_log debug "PostgreSQL still hasn't started yet. Waiting..."
     done
+
+    if is_replication; then
+        rm -f $OCF_RESKEY_force_start_file
+    fi
     ocf_log info "PostgreSQL is started."
     return $rc
 }
