@@ -753,7 +753,6 @@ pgsql_status() {
 
 pgsql_real_monitor() {
     local loglevel
-    local psql_options
     local rc
     local output
 
@@ -766,28 +765,12 @@ pgsql_real_monitor() {
 	return $OCF_NOT_RUNNING
     fi
 
-    if [ -n "$OCF_RESKEY_monitor_user" ]; then
-        PGUSER=$OCF_RESKEY_monitor_user; export PGUSER
-        PGPASSWORD=$OCF_RESKEY_monitor_password; export PGPASSWORD
-        psql_options="-p $OCF_RESKEY_pgport $OCF_RESKEY_pgdb"
-    else
-        psql_options="-p $OCF_RESKEY_pgport -U $OCF_RESKEY_pgdba $OCF_RESKEY_pgdb"
-    fi
-
-    if [ -n "$OCF_RESKEY_pghost" ]; then
-	psql_options="$psql_options -h $OCF_RESKEY_pghost"
-    else
-       if [ -n "$OCF_RESKEY_socketdir" ]; then
-           psql_options="$psql_options -h $OCF_RESKEY_socketdir"
-       fi
-    fi
-
     if ! is_replication; then
         OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
-        runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
+        runasowner -q $loglevel "$OCF_RESKEY_psql $psql_monitor_options $psql_options -c '$OCF_RESKEY_monitor_sql'"
         rc=$?
     else
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc '$CHECK_MS_SQL'" 2>&1`
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_monitor_options $psql_options -Atc '$CHECK_MS_SQL'" 2>&1`
         rc=$?
     fi
 
@@ -957,7 +940,7 @@ control_slave_status() {
     local node_number
     local node_name
 
-    if all_data_status=`$OCF_RESKEY_psql -U $OCF_RESKEY_pgdba $OCF_RESKEY_pgdb -h localhost -p $OCF_RESKEY_pgport -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
+    if all_data_status=`$OCF_RESKEY_psql $psql_checker_options $psql_options -Atc "$CHECK_REPLICATION_STATE_SQL;" 2>&1`;then
         if [ -n "$all_data_status" ]; then
             node_number=`echo -e "$all_data_status" | wc -l`
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
@@ -1132,7 +1115,7 @@ show_xlog_replay_location() {
     local log1
     local log2
 
-    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql -U $OCF_RESKEY_pgdba $OCF_RESKEY_pgdb -p $OCF_RESKEY_pgport -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
+    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_checker_options $psql_options -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
     rc=$?
     if [ "$rc" != "0" ]; then
         ocf_log err "Cannot get my xlog replay location."
@@ -1556,6 +1539,25 @@ if [ $US != root -a $US != $OCF_RESKEY_pgdba ]
 then
     ocf_log err "$0 must be run as root or $OCF_RESKEY_pgdba"
     exit $OCF_ERR_GENERIC
+fi
+
+# make psql command options
+psql_checker_options="-p $OCF_RESKEY_pgport -U $OCF_RESKEY_pgdba $OCF_RESKEY_pgdb"
+
+if [ -n "$OCF_RESKEY_monitor_user" ]; then
+    PGUSER=$OCF_RESKEY_monitor_user; export PGUSER
+    PGPASSWORD=$OCF_RESKEY_monitor_password; export PGPASSWORD
+    psql_monitor_options="-p $OCF_RESKEY_pgport $OCF_RESKEY_pgdb"
+else
+    psql_monitor_options=$psql_checker_options
+fi
+
+if [ -n "$OCF_RESKEY_pghost" ]; then
+    psql_options="-h $OCF_RESKEY_pghost"
+else
+   if [ -n "$OCF_RESKEY_socketdir" ]; then
+       psql_options="-h $OCF_RESKEY_socketdir"
+   fi
 fi
 
 # What kind of method was invoked?
