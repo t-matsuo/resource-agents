@@ -449,20 +449,11 @@ pgsql_real_start() {
 	rm -f $BACKUPLABEL
     fi
 
-    # If database cluster state is "in production" or "shutting down" or "unrecognized status code",
+    # If database was not shut down normally,
     # my data may be inconsistent, so I prohibit PostgreSQL from starting.
-    if is_replication; then
-        cluster_state=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep "Database cluster state:" | sed -e "s/Database cluster state: *//g"`
-        ocf_log info "Database cluster state is \"$cluster_state\"."
-        if [ -f $PGSQL_LOCK ]; then
-            ocf_log info "$PGSQL_LOCK file is exist. PostgreSQL is forced to start."
-        else
-            echo $cluster_state |  grep -q -e "in production" -e "shutting down" -e "unrecognized status code"
-            if [ "$?" = "0" ]; then
-                ocf_log warn "PostgreSQL is prohibited from starting. You have to create $PGSQL_LOCK file to force to start."
-                return $OCF_ERR_GENERIC
-            fi
-        fi
+    if is_replication && [ -f $PGSQL_LOCK ]; then
+        ocf_log warn "PostgreSQL is prohibited from starting. You have to delete $PGSQL_LOCK file to force to start."
+        return $OCF_ERR_GENERIC
     fi
 
     # Check if we need to create a log file
@@ -520,9 +511,6 @@ pgsql_real_start() {
 	ocf_log debug "PostgreSQL still hasn't started yet. Waiting..."
     done
 
-    if is_replication; then
-        rm -f $PGSQL_LOCK
-    fi
     ocf_log info "PostgreSQL is started."
     return $rc
 }
@@ -574,6 +562,9 @@ pgsql_promote() {
         change_data_status "$target" "DISCONNECT"
         change_master_score "$target" "$CAN_NOT_PROMOTE"
     done
+
+    touch $PGSQL_LOCK
+    ocf_log info "Created $PGSQL_LOCK."
 
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
     while :
@@ -646,6 +637,10 @@ pgsql_real_stop() {
         if ! pgsql_status
         then
             #PostgreSQL stopped
+            if is_replication; then
+                rm -f $PGSQL_LOCK
+                ocf_log info "Deleted $PGSQL_LOCK."
+            fi
             break;
         fi
         count=`expr $count + 1`
