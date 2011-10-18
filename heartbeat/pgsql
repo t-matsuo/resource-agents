@@ -1228,9 +1228,6 @@ reload_conf() {
 }
 
 make_recovery_conf() {
-    local node
-    local node_number
-
     touch $RECOVERY_CONF
     if ! chown $OCF_RESKEY_pgdba $RECOVERY_CONF; then
         ocf_log info "Cannot create recovery.conf"
@@ -1483,28 +1480,27 @@ PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 
 if is_replication; then
-RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
-XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.xlog_note"
+    RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
+    XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.xlog_note"
 
-CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
-CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
-CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
-CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
-ATTRD_UPDATER="${HA_SBIN_DIR}/attrd_updater -q -d 0"
+    CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
+    CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
+    CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
+    CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
 
-CAN_NOT_PROMOTE="-INFINITY"
-CAN_PROMOTE="100"
-PROMOTE_ME="1000"
+    CAN_NOT_PROMOTE="-INFINITY"
+    CAN_PROMOTE="100"
+    PROMOTE_ME="1000"
 
-CHECK_MS_SQL="select pg_is_in_recovery();"
-CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
-CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
+    CHECK_MS_SQL="select pg_is_in_recovery();"
+    CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
+    CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
 
-PGSQL_STATUS_ATTR="pgsql-status"
-PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
-PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
+    PGSQL_STATUS_ATTR="pgsql-status"
+    PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
+    PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
 
-HOSTNAME=`uname -n`
+    HOSTNAME=`uname -n`
 fi
 
 case "$1" in
