@@ -95,8 +95,6 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_stop_on_demote=${OCF_RESKEY_stop_on_demote_default}}
 : ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
-: ${OCF_RESKEY_rep_mode_conf="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.rep_mode.conf"}
-: ${OCF_RESKEY_force_start_file="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.force_start"}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
 
@@ -338,27 +336,6 @@ This is optional for replication.
 <content type="string" default="${OCF_RESKEY_tmpdir_default}" />
 </parameter>
 
-<parameter name="rep_mode_conf" unique="0" required="0">
-<longdesc lang="en">
-Path to file included from postgresql.conf to switch between async and sync.
-This parameter is used for "rep_mode=sync".
-Don't write synchronous_standby_names directive in postgresql.conf.
-This is optional for replication.
-</longdesc>
-<shortdesc lang="en">rep_mode_conf</shortdesc>
-<content type="string" default="\${tmpdir}/PGSQL.\${pgport}.rep_mode.conf" />
-</parameter>
-
-<parameter name="force_start_file" unique="0" required="0">
-<longdesc lang="en">
-Path to flag file to force to start PostgreSQL
-regardless of "Database cluster state".
-This is optional for replication.
-</longdesc>
-<shortdesc lang="en">force start file</shortdesc>
-<content type="string" default="\${tmpdir}/PGSQL.\${pgport}.force_start" />
-</parameter>
-
 <parameter name="pgctldata" unique="0" required="0">
 <longdesc lang="en">
 Path to pg_controldata command.
@@ -477,12 +454,12 @@ pgsql_real_start() {
     if is_replication; then
         cluster_state=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep "Database cluster state:" | sed -e "s/Database cluster state: *//g"`
         ocf_log info "Database cluster state is \"$cluster_state\"."
-        if [ -f $OCF_RESKEY_force_start_file ]; then
-            ocf_log info "$OCF_RESKEY_force_start_file file is exist. PostgreSQL is forced to start."
+        if [ -f $PGSQL_LOCK ]; then
+            ocf_log info "$PGSQL_LOCK file is exist. PostgreSQL is forced to start."
         else
             echo $cluster_state |  grep -q -e "in production" -e "shutting down" -e "unrecognized status code"
             if [ "$?" = "0" ]; then
-                ocf_log warn "PostgreSQL is prohibited from starting. You have to create $OCF_RESKEY_force_start_file file to force to start."
+                ocf_log warn "PostgreSQL is prohibited from starting. You have to create $PGSQL_LOCK file to force to start."
                 return $OCF_ERR_GENERIC
             fi
         fi
@@ -544,7 +521,7 @@ pgsql_real_start() {
     done
 
     if is_replication; then
-        rm -f $OCF_RESKEY_force_start_file
+        rm -f $PGSQL_LOCK
     fi
     ocf_log info "PostgreSQL is started."
     return $rc
@@ -562,9 +539,9 @@ pgsql_start() {
     # initializing for replication
     change_pgsql_status "$HOSTNAME" "STOP"
     $CRM_MASTER -v $CAN_NOT_PROMOTE
-    rm -f ${XLOG_NOTE_FILE}*
+    rm -f ${XLOG_NOTE_FILE}.*
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-        chown $OCF_RESKEY_pgdba $OCF_RESKEY_rep_mode_conf
+        chown $OCF_RESKEY_pgdba $REP_MODE_CONF
     fi
     if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
@@ -1141,7 +1118,7 @@ delete_xlog_replay_location() {
 set_async_mode_all() {
     [ "$OCF_RESKEY_rep_mode" = "sync" ] || return 0
     ocf_log info "Setup all nodes as an async."
-    echo "" > "$OCF_RESKEY_rep_mode_conf" || return 1
+    echo "" > "$REP_MODE_CONF" || return 1
     if [ "$?" != "0" ]; then
         ocf_log err "Cannot setup all nodes as an async mode."
         return 1
@@ -1152,7 +1129,7 @@ set_async_mode_all() {
 set_async_mode() {
     local sync_node_in_conf
 
-    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
         echo "1=$1, conf=$sync_node_in_conf" 1>&2
         if ! echo $sync_node_in_conf | grep "$1"; then
@@ -1162,9 +1139,9 @@ set_async_mode() {
             ocf_log info "Setup $1 as an async mode."
             sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |  sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
             if [ -n $sync_node_in_conf ]; then
-                echo "synchronous_standby_names = '$sync_node_in_conf'" > "$OCF_RESKEY_rep_mode_conf"
+                echo "synchronous_standby_names = '$sync_node_in_conf'" > "$REP_MODE_CONF"
             else
-                echo "" > "$OCF_RESKEY_rep_mode_conf"
+                echo "" > "$REP_MODE_CONF"
             fi
         fi
     else
@@ -1180,21 +1157,21 @@ set_async_mode() {
 set_sync_mode() {
     local sync_node_in_conf
 
-    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
         if echo "$sync_node_in_conf" | grep "$1"; then
             ocf_log info "$1 is already sync mode."
             return 0
         else
             ocf_log info "Setup $1 as a sync mode."
-            echo "synchronous_standby_names = '$sync_node_in_conf,$1'" > "$OCF_RESKEY_rep_mode_conf"
+            echo "synchronous_standby_names = '$sync_node_in_conf,$1'" > "$REP_MODE_CONF"
         fi
     else
         ocf_log info "Setup $1 as a sync mode."
-        echo "synchronous_standby_names = '$1'" > "$OCF_RESKEY_rep_mode_conf"
+        echo "synchronous_standby_names = '$1'" > "$REP_MODE_CONF"
     fi
 
-    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2`
+    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
     ocf_log info "All synced nodes : \"$sync_node_in_conf\""
     reload_conf
     return $?
@@ -1203,7 +1180,7 @@ set_sync_mode() {
 is_sync_mode() {
     local target
 
-    sync_node_in_conf=`cat $OCF_RESKEY_rep_mode_conf | cut -d "'" -f 2 | sed "s/,/ /g"`
+    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2 | sed "s/,/ /g"`
     if [ -n "$sync_node_in_conf" ]; then
         for target in $sync_node_in_conf; do
             if [ "$target" = "$1" ];then
@@ -1400,11 +1377,11 @@ pgsql_validate_all() {
         fi
 
         if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            if [ ! -n "$OCF_RESKEY_rep_mode_conf" ]; then
+            if [ ! -n "$REP_MODE_CONF" ]; then
                 return $OCF_ERR_CONFIGURED
             fi
-            if ! touch $OCF_RESKEY_rep_mode_conf; then
-                ocf_log err "Cannot create $OCF_RESKEY_rep_mode_conf"
+            if ! touch $REP_MODE_CONF; then
+                ocf_log err "Cannot create $REP_MODE_CONF"
                 return $OCF_ERR_PERM
             fi
         fi
@@ -1481,7 +1458,9 @@ BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 
 if is_replication; then
     RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
-    XLOG_NOTE_FILE="${OCF_RESKEY_tmpdir}/PGSQL.${OCF_RESKEY_pgport}.xlog_note"
+    REP_MODE_CONF=${OCF_RESKEY_tmpdir}/rep_mode.conf
+    PGSQL_LOCK=${OCF_RESKEY_tmpdir}/PGSQL.lock
+    XLOG_NOTE_FILE=${OCF_RESKEY_tmpdir}/xlog_note
 
     CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
     CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
