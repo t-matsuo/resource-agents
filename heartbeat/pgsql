@@ -852,7 +852,7 @@ pgsql_monitor() {
         change_pgsql_status "$HOSTNAME" "HS:alone"
         is_master_right
         if [ "$?" = "0" ]; then
-            rm -f ${XLOG_NOTE_FILE}.$count
+            rm -f ${XLOG_NOTE_FILE}.*
         fi
     else
         output=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
