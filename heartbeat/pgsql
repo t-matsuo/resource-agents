@@ -1381,7 +1381,7 @@ pgsql_validate_all() {
 
         if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
-            return $OCF_ERR_PERM
+            return $OCF_ERR_INSTALLED
         fi
         if [ ! -n "$OCF_RESKEY_master_ip" ]; then
             ocf_log err "master_ip can't be empty"
