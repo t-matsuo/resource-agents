@@ -261,7 +261,7 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 <parameter name="rep_mode" unique="0" required="0">
 <longdesc lang="en">
 Replication mode(none(default)/async/sync).
-"aync","sync" require PostgreSQL 9.1 or later.
+"async" and "sync" require PostgreSQL 9.1 or later.
 If you use async or sync, it requires node_list, master_ip, restore_command
 parameters, and needs setting postgresql.conf, pg_hba.conf up for
 replication.
@@ -272,7 +272,7 @@ replication.
 
 <parameter name="node_list" unique="0" required="0">
 <longdesc lang="en">
-All node names. Please separate each node with a space.
+All node names. Please separate each node name with a space.
 This is required for replication.
 </longdesc>
 <shortdesc lang="en">node list</shortdesc>
@@ -281,7 +281,7 @@ This is required for replication.
 
 <parameter name="restore_command" unique="0" required="0">
 <longdesc lang="en">
-restore_command for recovery.conf
+restore_command for recovery.conf.
 This is required for replication.
 </longdesc>
 <shortdesc lang="en">restore_command</shortdesc>
@@ -291,7 +291,7 @@ This is required for replication.
 <parameter name="master_ip" unique="0" required="0">
 <longdesc lang="en">
 Master's floating IP address to be connected from hot standby.
-This parameter used for "primary_conninfo" of recovery.conf.
+This parameter is used for "primary_conninfo" in recovery.conf.
 This is required for replication.
 </longdesc>
 <shortdesc lang="en">master ip</shortdesc>
@@ -310,17 +310,18 @@ This is required for replication.
 
 <parameter name="stop_on_demote" unique="0" required="0">
 <longdesc lang="en">
-Stop PostgreSQL instead of restart on demote to speed up failover.(yes/no(default))
-If you use yes,  monitor is failed after demote.
+Whether or not to stop PostgreSQL instead of restarting it
+on demote, to speed up failover (yes/no(default)).
+If this parameter is yes, monitor fails after demote.
 This is optional for replication.
 </longdesc>
 <shortdesc lang="en">stop_on_demote</shortdesc>
-<content type="string" default="${OCF_RESKEY_stop_on_demote_default}" />
+<content type="boolean" default="${OCF_RESKEY_stop_on_demote_default}" />
 </parameter>
 
 <parameter name="primary_conninfo_opt" unique="0" required="0">
 <longdesc lang="en">
-primary_conninfo options of recovery.conf exclude  host, port, user and application_name.
+primary_conninfo options of recovery.conf except host, port, user and application_name.
 This is optional for replication.
 </longdesc>
 <shortdesc lang="en">primary_conninfo_opt</shortdesc>
