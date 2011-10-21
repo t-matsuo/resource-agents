@@ -450,13 +450,6 @@ pgsql_real_start() {
 	rm -f $BACKUPLABEL
     fi
 
-    # If database was not shut down normally,
-    # my data may be inconsistent, so I prohibit PostgreSQL from starting.
-    if is_replication && [ -f $PGSQL_LOCK ]; then
-        ocf_log warn "PostgreSQL is prohibited from starting. You have to delete $PGSQL_LOCK file to force to start."
-        return $OCF_ERR_GENERIC
-    fi
-
     # Check if we need to create a log file
     if ! check_log_file $OCF_RESKEY_logfile
     then
@@ -527,6 +520,7 @@ pgsql_start() {
 
     # initializing for replication
     change_pgsql_status "$HOSTNAME" "STOP"
+    delete_master_baseline
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${XLOG_NOTE_FILE}.*
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
@@ -535,6 +529,12 @@ pgsql_start() {
     if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
+
+    if [ -f $PGSQL_LOCK ]; then
+        ocf_log warn "PostgreSQL is prohibited from starting. You have to delete $PGSQL_LOCK file to force to start."
+        return $OCF_ERR_GENERIC
+    fi
+    is_slave_right || return $OCF_ERR_GENERIC
 
     # start
     pgsql_real_start
@@ -566,6 +566,7 @@ pgsql_promote() {
 
     touch $PGSQL_LOCK
     ocf_log info "Created $PGSQL_LOCK."
+    show_master_baseline
 
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
     while :
@@ -596,6 +597,7 @@ pgsql_demote() {
     fi
 
     $CRM_MASTER -v $CAN_NOT_PROMOTE
+    delete_master_baseline
 
     if ! pgsql_status
     then
@@ -863,14 +865,22 @@ pgsql_post_demote() {
         fi
 
         set_async_mode_all
+
+        if [ -f $PGSQL_LOCK ]; then
+            ocf_log warn "PostgreSQL is prohibited from restarting. You have to delete $PGSQL_LOCK file to force to start."
+            return $OCF_ERR_GENERIC
+        fi
+        sleep 3
+        is_slave_right || return $OCF_ERR_GENERIC
+
         pgsql_real_start
         if [ $? -ne $OCF_SUCCESS ]; then
             ocf_log err "Cannot start PostgreSQL as a hot standby on post-demote."
             $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
             return $OCF_ERR_GENERIC
         fi
-        change_pgsql_status "$HOSTNAME" "HS:alone"
-        return $OCF_SUCCESS
+    else
+        show_master_baseline
     fi
 
     change_pgsql_status "$HOSTNAME" "HS:alone"
@@ -888,7 +898,11 @@ pgsql_notify() {
             case $op in
                 promote)
                     delete_xlog_replay_location
-                    return $?
+                    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
+                    if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
+                        delete_master_baseline
+                    fi
+                    return $OCF_SUCCESS
                     ;;
                 demote)
                     pgsql_post_demote
@@ -986,6 +1000,76 @@ control_slave_status() {
     return 0
 }
 
+is_slave_right() {
+    local output
+    local my_timelineid
+    local my_checkpoint
+    local newest_timelineid
+    local newest_location
+    local tmp_timelineid
+    local tmp_location
+    local cmp_location
+    local node_list
+
+    if [ "$OPERATION" = "start" ]; then
+        if [ x != x$OCF_RESKEY_CRM_meta_notify_master_uname ]; then
+            node_list=`echo $OCF_RESKEY_CRM_meta_notify_master_uname | sed "s/ /\n/g" | head -1`
+        else
+            return 0
+        fi
+    else
+        node_list=$OCF_RESKEY_node_list
+    fi
+
+    my_timelineid=`get_my_timeline_id` || return 1
+    my_checkpoint=`get_my_checkpoint` || return 1
+    ocf_log info "My Timeline ID and Checkpoint : $my_timelineid:$my_checkpoint"
+    newest_timelineid="0"
+    newest_location="0000000000000000"
+    for node in ${node_list}; do
+        if [ "$node" = "$HOSTNAME" ]; then
+            continue
+        fi
+        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
+        rc=$?
+        if [ "$rc" != "0" ]; then
+            ocf_log warn "Cannot get $node master baseline."
+            if [ "$OPERATION" = "start" ]; then
+                return 1
+            fi
+            continue
+        else
+            tmp_timelineid=`echo $output | cut -d ":" -f 1`
+            tmp_location=`echo $output | cut -d ":" -f 2`
+            ocf_log info "$node master baseline : $tmp_timelineid:$tmp_location"
+            # get newer location
+            cmp_location=`echo -e "$tmp_location\n$newest_checkpoint" | sort -r | head -1`
+            if [ "$cmp_location" = "$tmp_location" ]; then
+                newest_location=$tmp_location
+                if [ "$tmp_timelineid" -ge "$newest_timelineid" ]; then
+                    newest_timelineid=$tmp_timelineid
+                fi
+            fi
+        fi
+    done
+
+    if [ "$my_timelineid" -gt "$newest_timelineid" ]; then
+        ocf_log info "My Timeline ID is newer then Master's."
+        return 0
+    fi
+    if [ "$my_timelineid" -lt "$newest_timelineid" ]; then
+        ocf_log warn "My data may be inconsistent because my Timeline ID is too old."
+        return 1
+    fi
+    # get older location
+    cmp_location=`echo -e "$newest_location\n$my_checkpoint" | sort | head -1`
+    if [ "$my_checkpoint" = "$cmp_location" ]; then
+        return 0
+    fi
+    ocf_log warn "My data is inconsistent."
+    return 1
+}
+
 is_master_right() {
     local rc
     local old
@@ -1080,7 +1164,7 @@ is_replication() {
     return 1
 }
 
-show_xlog_replay_location() {
+get_my_checkpoint() {
     local output
     local rc
     local output1
@@ -1088,26 +1172,92 @@ show_xlog_replay_location() {
     local log1
     local log2
 
-    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
+    output=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep "Latest checkpoint location:" | sed -e "s/Latest checkpoint location: *//g"`
     rc=$?
     if [ "$rc" != "0" ]; then
-        ocf_log err "Cannot get my xlog replay location."
-        return $rc
+        ocf_log err "Cannot get my latest checkpoint location."
+        return 1
     fi
 
     output1=`echo "$output" | cut -d "/" -f 1`
     output2=`echo "$output" | cut -d "/" -f 2`
     log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
     log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
-    ocf_log info "My xlog replay location : ${log1}/${log2}"
     echo "${log1}${log2}"
+    return 0
+}
 
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -v "${log1}${log2}"
+get_my_location() {
+    local output
+    local rc
+    local output1
+    local output2
+    local log1
+    local log2
+
+    if [ "$1" = "replay" ]; then
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
+    elif [ "$1" = "receive" ]; then
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_RECEIVE_LOC_SQL}\""`
+    else
+        ocf_log err "invalid args in get_my_location()."
+        return 1
+    fi
+
+    rc=$?
+    if [ "$rc" != "0" ]; then
+        ocf_log err "Cannot get my xlog $1 location."
+        return 1
+    fi
+
+    output1=`echo "$output" | cut -d "/" -f 1`
+    output2=`echo "$output" | cut -d "/" -f 2`
+    log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
+    log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
+    echo "${log1}${log2}"
+    return 0
+}
+
+get_my_timeline_id() {
+    local timelineid
+
+    timelineid=`$OCF_RESKEY_pgctldata $OCF_RESKEY_pgdata | grep "Latest checkpoint's TimeLineID:" | sed -e "s/Latest checkpoint's TimeLineID: *//g"`
+    rc=$?
+    if [ "$rc" != "0" ]; then
+        ocf_log err "Cannot get my Timeline ID."
+        return 1
+    fi
+    echo $timelineid
+    return 0
+}
+
+show_xlog_replay_location() {
+    local location
+
+    location=`get_my_location replay` || return 1
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -v "$location"
     return $?
 }
 
 delete_xlog_replay_location() {
     $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+    return $?
+}
+
+show_master_baseline() {
+    local location
+    local timelineid
+
+    runasowner -q err "$OCF_RESKEY_psql $psql_options -c 'CHECKPOINT'"
+    location=`get_my_location receive`
+    timelineid=`get_my_timeline_id`
+    ocf_log info "my master baseline : $timelineid:$location."
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -v "$timelineid:$location"
+    return $?
+}
+
+delete_master_baseline() {
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -D
     return $?
 }
 
@@ -1469,13 +1619,16 @@ if is_replication; then
 
     CHECK_MS_SQL="select pg_is_in_recovery();"
     CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
+    CHECK_XLOG_RECEIVE_LOC_SQL="select pg_last_xlog_receive_location();"
     CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
 
     PGSQL_STATUS_ATTR="pgsql-status"
     PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
     PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
+    PGSQL_MASTER_BASELINE="pgsql-master-baseline"
 
     HOSTNAME=`uname -n`
+    OPERATION=$1
 fi
 
 case "$1" in
