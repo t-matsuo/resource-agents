@@ -534,7 +534,7 @@ pgsql_start() {
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
         chown $OCF_RESKEY_pgdba $REP_MODE_CONF
     fi
-    if ! make_recovery_conf && ! delete_xlog_replay_location && ! set_async_mode_all; then
+    if ! make_recovery_conf || ! delete_xlog_replay_location || ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
 
