@@ -1272,7 +1272,7 @@ delete_master_baseline() {
 set_async_mode_all() {
     [ "$OCF_RESKEY_rep_mode" = "sync" ] || return 0
     ocf_log info "Setup all nodes as an async."
-    echo "" > "$REP_MODE_CONF" || return 1
+    echo "" > "$REP_MODE_CONF"
     if [ "$?" != "0" ]; then
         ocf_log err "Cannot setup all nodes as an async mode."
         return 1
