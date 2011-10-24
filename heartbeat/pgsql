@@ -1531,9 +1531,6 @@ pgsql_validate_all() {
         fi
 
         if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            if [ ! -n "$REP_MODE_CONF" ]; then
-                return $OCF_ERR_CONFIGURED
-            fi
             if ! touch $REP_MODE_CONF; then
                 ocf_log err "Cannot create $REP_MODE_CONF"
                 return $OCF_ERR_PERM
