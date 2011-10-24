@@ -633,31 +633,36 @@ pgsql_real_stop() {
         return $OCF_SUCCESS
     fi
 
-    # Stop PostgreSQL, do not wait for clients to disconnect
-    runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m fast"
+    if ! is_replication || [ "$OCF_RESKEY_stop_on_demote" = "no" ]; then
+        # Stop PostgreSQL, do not wait for clients to disconnect
+       runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m fast"
 
-    # stop waiting
-    count=0
-    while [ $count -lt $OCF_RESKEY_stop_escalate ]
-    do
-        if ! pgsql_status
-        then
-            #PostgreSQL stopped
-            if is_replication; then
-                rm -f $PGSQL_LOCK
-                ocf_log info "Deleted $PGSQL_LOCK."
+        # stop waiting
+        count=0
+        while [ $count -lt $OCF_RESKEY_stop_escalate ]
+        do
+            if ! pgsql_status
+            then
+                #PostgreSQL stopped
+                if is_replication; then
+                    rm -f $PGSQL_LOCK
+                    ocf_log info "Deleted $PGSQL_LOCK."
+                fi
+                break;
             fi
-            break;
-        fi
-        count=`expr $count + 1`
-        sleep 1
-    done
+            count=`expr $count + 1`
+            sleep 1
+        done
 
-    if pgsql_status
-    then
-       #PostgreSQL is still up. Use another shutdown mode.
-       ocf_log info "PostgreSQL failed to stop after ${OCF_RESKEY_stop_escalate}s using -m fast. Trying -m immediate..."
-       runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
+        if pgsql_status
+        then
+            #PostgreSQL is still up. Use another shutdown mode.
+            ocf_log info "PostgreSQL failed to stop after ${OCF_RESKEY_stop_escalate}s using -m fast. Trying -m immediate..."
+            runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
+        fi
+    else
+        ocf_log info "Stooping PostgreSQL with -m immediate."
+        runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
     fi
 
     while :
