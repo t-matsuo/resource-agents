@@ -521,6 +521,11 @@ pgsql_start() {
         return $?
     fi
 
+    # Check whether tmpdir is readable by pgdba user
+    if ! runasowner "test -r $OCF_RESKEY_tmpdir"; then
+        ocf_log err "Directory $OCF_RESKEY_tmpdir is not readable by $OCF_RESKEY_pgdba"
+        return $OCF_ERR_PERM
+    fi
     # initializing for replication
     change_pgsql_status "$HOSTNAME" "STOP"
     delete_master_baseline
