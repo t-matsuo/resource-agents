@@ -758,7 +758,7 @@ pgsql_real_monitor() {
         runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
         rc=$?
     else
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc '$CHECK_MS_SQL'"`
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_MS_SQL}\""`
         rc=$?
     fi
 
@@ -940,7 +940,8 @@ control_slave_status() {
     local node_number
     local node_name
 
-    if all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_REPLICATION_STATE_SQL};\""`;then
+    all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
+    if [ $? -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
             node_number=`echo -e "$all_data_status" | wc -l`
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
@@ -1627,9 +1628,9 @@ if is_replication; then
     CAN_PROMOTE="100"
     PROMOTE_ME="1000"
 
-    CHECK_MS_SQL="select pg_is_in_recovery();"
-    CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location();"
-    CHECK_XLOG_RECEIVE_LOC_SQL="select pg_last_xlog_receive_location();"
+    CHECK_MS_SQL="select pg_is_in_recovery()"
+    CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location()"
+    CHECK_XLOG_RECEIVE_LOC_SQL="select pg_last_xlog_receive_location()"
     CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
 
     PGSQL_STATUS_ATTR="pgsql-status"
