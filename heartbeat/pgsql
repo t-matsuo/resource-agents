@@ -437,8 +437,11 @@ pgsql_real_start() {
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
-        pgsql_real_monitor warn
-        return $rc
+        if is_replication; then
+            return $OCF_ERR_GENERIC
+        else
+            return $OCF_SUCCESS
+        fi
     fi
 
     # Remove postmaster.pid if it exists
