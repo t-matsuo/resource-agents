@@ -310,7 +310,7 @@ This is required for replication.
 
 <parameter name="stop_on_demote" unique="0" required="0">
 <longdesc lang="en">
-Whether or not to stop PostgreSQL instead of restarting it
+Whether or not to stop PostgreSQL with instead of restarting it
 on demote, to speed up failover (yes/no(default)).
 If this parameter is yes, monitor fails after demote.
 This is optional for replication.
@@ -539,7 +539,7 @@ pgsql_start() {
     fi
 
     if [ -f $PGSQL_LOCK ]; then
-        ocf_log warn "PostgreSQL is prohibited from starting. You have to delete $PGSQL_LOCK file to force to start."
+        ocf_log err "PostgreSQL is prohibited from starting. You have to remove $PGSQL_LOCK file to force to start."
         return $OCF_ERR_GENERIC
     fi
     is_slave_right || return $OCF_ERR_GENERIC
@@ -547,7 +547,7 @@ pgsql_start() {
     # start
     pgsql_real_start
     if [ $? -ne $OCF_SUCCESS ]; then
-            ocf_log warn "PostgreSQL has not started as a hot standby."
+            ocf_log err "PostgreSQL has not started as a hot standby."
             return $OCF_ERR_GENERIC
     fi
     change_pgsql_status "$HOSTNAME" "HS:alone"
@@ -571,8 +571,8 @@ pgsql_promote() {
         change_master_score "$target" "$CAN_NOT_PROMOTE"
     done
 
+    ocf_log info "Creating $PGSQL_LOCK."
     touch $PGSQL_LOCK
-    ocf_log info "Created $PGSQL_LOCK."
     show_master_baseline
 
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
@@ -648,8 +648,8 @@ pgsql_real_stop() {
             then
                 #PostgreSQL stopped
                 if is_replication; then
+                    ocf_log info "Removing $PGSQL_LOCK."
                     rm -f $PGSQL_LOCK
-                    ocf_log info "Deleted $PGSQL_LOCK."
                 fi
                 break;
             fi
@@ -664,7 +664,7 @@ pgsql_real_stop() {
             runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
         fi
     else
-        ocf_log info "Stooping PostgreSQL with -m immediate."
+        ocf_log info "Stooping PostgreSQL using -m immediate."
         runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
     fi
 
@@ -854,19 +854,19 @@ pgsql_post_demote() {
     local my_fail_count
 
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
-    ocf_log debug "post-demote called.(Demote uname is $DEMOTE_NODE)"
+    ocf_log debug "post-demote called. Demote uname is $DEMOTE_NODE"
 
     # I start pgsql on post_demote()
     # because if it's failed starting pgsql on demote, node is fenced.
     if [ "$DEMOTE_NODE" = "$HOSTNAME" ]; then
         if [ "$OCF_RESKEY_stop_on_demote" != "no" ]; then
-            ocf_log info "I don't restart on post-demote because of stop_on_demote=$OCF_RESKEY_stop_on_demote."
+            ocf_log info "I don't start PostgreSQL on post-demote because of stop_on_demote=$OCF_RESKEY_stop_on_demote."
             return $OCF_SUCCESS
         fi
 
         my_fail_count=`$CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -N $HOSTNAME -G -Q | sed "s/INFINITY/1000000/g"`
         if [ "$my_fail_count" != "0" ]; then
-            ocf_log info "My fail-count=$my_fail_count, so I don't start on post-demote."
+            ocf_log info "I don't start PostgreSQL on post-demote because of my fail-count=$my_fail_count."
             return $OCF_SUCCESS
         fi
 
@@ -878,7 +878,7 @@ pgsql_post_demote() {
         set_async_mode_all
 
         if [ -f $PGSQL_LOCK ]; then
-            ocf_log warn "PostgreSQL is prohibited from restarting. You have to delete $PGSQL_LOCK file to force to start."
+            ocf_log err "PostgreSQL is prohibited from restarting. You have to remove $PGSQL_LOCK file to force to start."
             return $OCF_ERR_GENERIC
         fi
         sleep 3
@@ -1069,7 +1069,7 @@ is_slave_right() {
         return 0
     fi
     if [ "$my_timelineid" -lt "$newest_timelineid" ]; then
-        ocf_log warn "My data may be inconsistent because my Timeline ID is too old."
+        ocf_log err "My data may be inconsistent because my Timeline ID is too old."
         return 1
     fi
     # get older location
@@ -1077,7 +1077,7 @@ is_slave_right() {
     if [ "$my_checkpoint" = "$cmp_location" ]; then
         return 0
     fi
-    ocf_log warn "My data is inconsistent."
+    ocf_log err "My data is inconsistent."
     return 1
 }
 
@@ -1357,7 +1357,7 @@ reload_conf() {
 make_recovery_conf() {
     touch $RECOVERY_CONF
     if ! chown $OCF_RESKEY_pgdba $RECOVERY_CONF; then
-        ocf_log info "Cannot create recovery.conf"
+        ocf_log err "Cannot create recovery.conf"
         return 1
     fi
 
@@ -1368,7 +1368,7 @@ restore_command = '${OCF_RESKEY_restore_command}'
 recovery_target_timeline = 'latest'
 END
 
-    ocf_log info "Created recovery.conf. host=${OCF_RESKEY_master_ip}, user=${OCF_RESKEY_repuser}"
+    ocf_log debug "Created recovery.conf. host=${OCF_RESKEY_master_ip}, user=${OCF_RESKEY_repuser}"
     return 0
 }
 
@@ -1381,7 +1381,7 @@ change_pgsql_status() {
         ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
         $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -v "$2"
         if [ $? -ne 0 ]; then
-            ocf_log err "FATAL : Cannot change $PGSQL_STATUS_ATTR"
+            ocf_log err "Cannot change $PGSQL_STATUS_ATTR"
             return 1
         fi
     fi
@@ -1397,7 +1397,7 @@ change_data_status() {
         ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
         $CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -v "$2"
         if [ $? -ne 0 ]; then
-            ocf_log err "FATAL : Cannot change $PGSQL_DATA_STATUS_ATTR"
+            ocf_log err "Cannot change $PGSQL_DATA_STATUS_ATTR"
             return 1
         fi
     fi
@@ -1428,7 +1428,7 @@ change_master_score() {
             ocf_log info "Changing ${rsc}:${instance} master score on $1 : $current_score->$2."
             $CRM_ATTR_REBOOT -N "$target" -n "master-${rsc}:${instance}" -v "$2"
             if [ $? -ne 0 ]; then
-                ocf_log err "FATAL : Cannot change master score."
+                ocf_log err "Cannot change master score."
                 return 1
             fi
         fi
