@@ -758,15 +758,8 @@ pgsql_real_monitor() {
     fi
 
     if [ $rc -ne  0 ]; then
-	ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
-        if [ $rc -eq 1 ]; then
-            ocf_log err "Fatal error (out of memory, file not found, etc.) occurred while executing the psql command."
-        elif [ $rc -eq 2 ]; then
-            ocf_log $loglevel "Connection error (connection to the server went bad and the session was not interactive) occurred while executing the psql command."
-        elif [ $rc -eq 3 ]; then
-            ocf_log err "Script error (the variable ON_ERROR_STOP was set) occurred while executing the psql command."
-        fi
-	return $OCF_ERR_GENERIC
+        report_psql_error $rc $loglevel
+        return $OCF_ERR_GENERIC
     fi
 
     if is_replication; then
@@ -929,6 +922,7 @@ pgsql_notify() {
 }
 
 control_slave_status() {
+    local rc
     local data_status
     local target
     local all_data_status
@@ -936,13 +930,14 @@ control_slave_status() {
     local node_name
 
     all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
-    if [ $? -eq 0 ]; then
+    rc=$?
+    if [ $rc -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
             node_number=`echo -e "$all_data_status" | wc -l`
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
         fi
     else
-        ocf_log warn "psql err."
+        report_psql_error $rc warn
         all_data_status=""
     fi
 
@@ -1192,6 +1187,7 @@ get_my_checkpoint() {
 }
 
 get_my_location() {
+    local rc
     local output
     local replay_loc
     local receive_loc
@@ -1202,7 +1198,9 @@ get_my_location() {
     local newer_location
 
     output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_LOC_SQL}\""`
-    if [ $? -ne 0 ]; then
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        report_psql_error $rc warn
         ocf_log err "Cannot get my xlog location."
         return 1
     fi
@@ -1252,10 +1250,15 @@ delete_xlog_location() {
 }
 
 show_master_baseline() {
+    local rc
     local location
     local timelineid
 
     runasowner -q err "$OCF_RESKEY_psql $psql_options -c 'CHECKPOINT'"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        report_psql_error $rc warn
+    fi
     location=`get_my_location`
     timelineid=`get_my_timeline_id`
     ocf_log info "my master baseline : $timelineid:$location."
@@ -1438,6 +1441,24 @@ change_master_score() {
         instance=`expr $instance + 1`
     done
     return 0
+}
+
+report_psql_error()
+{
+    local rc
+    local loglevel
+
+    rc=$1
+    loglevel=${2:-err}
+
+    ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
+    if [ $rc -eq 1 ]; then
+        ocf_log err "Fatal error (out of memory, file not found, etc.) occurred while executing the psql command."
+    elif [ $rc -eq 2 ]; then
+        ocf_log $loglevel "Connection error (connection to the server went bad and the session was not interactive) occurred while executing the psql command."
+    elif [ $rc -eq 3 ]; then
+        ocf_log err "Script error (the variable ON_ERROR_STOP was set) occurred while executing the psql command."
+    fi
 }
 
 check_binary2() {
