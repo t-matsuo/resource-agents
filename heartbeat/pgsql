@@ -980,7 +980,7 @@ control_slave_status() {
                     fi
                 else
                     change_data_status "$target" "$data_status"
-                    change_master_score "$target" "$CAN_PROMOTE"
+                    change_master_score "$target" "$CAN_NOT_PROMOTE"
                 fi
                 change_pgsql_status "$target" "HS:async"
                 ;;
