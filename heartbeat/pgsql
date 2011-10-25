@@ -531,7 +531,7 @@ pgsql_start() {
     delete_master_baseline
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
-    if ! make_recovery_conf || ! delete_xlog_replay_location || ! set_async_mode_all; then
+    if ! make_recovery_conf || ! delete_xlog_location || ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
 
@@ -693,7 +693,7 @@ pgsql_stop() {
     fi
 
     $CRM_MASTER -v $CAN_NOT_PROMOTE
-    delete_xlog_replay_location
+    delete_xlog_location
 
     if ! pgsql_status
     then
@@ -905,7 +905,7 @@ pgsql_notify() {
         post)
             case $op in
                 promote)
-                    delete_xlog_replay_location
+                    delete_xlog_location
                     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
                     if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
                         delete_master_baseline
@@ -1106,9 +1106,9 @@ is_master_right() {
     fi
     ocf_log info "My data status=$data_status."
 
-    show_xlog_replay_location
+    show_xlog_location
     if [ $? -ne 0 ]; then
-        ocf_log err "Failed showing my xlog replay location."
+        ocf_log err "Failed showing my xlog location."
         exit $OCF_ERR_GENERIC
     fi
 
@@ -1122,14 +1122,14 @@ is_master_right() {
     done
     new=`expr $old + 1`
 
-    # get xlog replay locations of all nodes
+    # get xlog locations of all nodes
     for node in ${OCF_RESKEY_node_list}; do
-        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -G -q 2>/dev/null`
+        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_XLOG_LOC_NAME" -G -q 2>/dev/null`
         if [ $? -ne 0 ]; then
-            ocf_log warn "Cannot get $node xlog replay location."
+            ocf_log warn "Cannot get $node xlog location."
             continue
         else
-            ocf_log info "$node xlog replay location : $output"
+            ocf_log info "$node xlog location : $output"
             echo "$node $output" >> ${XLOG_NOTE_FILE}.${new}
             if [ "$node" = "$HOSTNAME" ]; then
                 mylocation=$output
@@ -1193,30 +1193,36 @@ get_my_checkpoint() {
 
 get_my_location() {
     local output
+    local replay_loc
+    local receive_loc
     local output1
     local output2
     local log1
     local log2
+    local newer_location
 
-    if [ "$1" = "replay" ]; then
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_REPLAY_LOC_SQL}\""`
-    elif [ "$1" = "receive" ]; then
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_RECEIVE_LOC_SQL}\""`
-    else
-        ocf_log err "invalid args in get_my_location()."
-        return 1
-    fi
-
+    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_LOC_SQL}\""`
     if [ $? -ne 0 ]; then
-        ocf_log err "Cannot get my xlog $1 location."
+        ocf_log err "Cannot get my xlog location."
         return 1
     fi
+    replay_loc=`echo $output | cut -d "|" -f 1`
+    receive_loc=`echo $output | cut -d "|" -f 2`
 
-    output1=`echo "$output" | cut -d "/" -f 1`
-    output2=`echo "$output" | cut -d "/" -f 2`
+    output1=`echo "$replay_loc" | cut -d "/" -f 1`
+    output2=`echo "$replay_loc" | cut -d "/" -f 2`
     log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
     log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
-    echo "${log1}${log2}"
+    replay_loc="${log1}${log2}"
+
+    output1=`echo "$receive_loc" | cut -d "/" -f 1`
+    output2=`echo "$receive_loc" | cut -d "/" -f 2`
+    log1=`printf "%08s\n" $output1 | sed "s/ /0/g"`
+    log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
+    receive_loc="${log1}${log2}"
+
+    newer_location=`echo -e "$replay_loc\n$receive_loc" | sort -r | head -1`
+    echo "$newer_location"
     return 0
 }
 
@@ -1232,16 +1238,16 @@ get_my_timeline_id() {
     return 0
 }
 
-show_xlog_replay_location() {
+show_xlog_location() {
     local location
 
-    location=`get_my_location replay` || return 1
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -v "$location"
+    location=`get_my_location` || return 1
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
     return $?
 }
 
-delete_xlog_replay_location() {
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_REPLAY_LOC_NAME" -D
+delete_xlog_location() {
+    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_LOC_NAME" -D
     return $?
 }
 
@@ -1250,7 +1256,7 @@ show_master_baseline() {
     local timelineid
 
     runasowner -q err "$OCF_RESKEY_psql $psql_options -c 'CHECKPOINT'"
-    location=`get_my_location receive`
+    location=`get_my_location`
     timelineid=`get_my_timeline_id`
     ocf_log info "my master baseline : $timelineid:$location."
     $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -v "$timelineid:$location"
@@ -1608,13 +1614,12 @@ if is_replication; then
     PROMOTE_ME="1000"
 
     CHECK_MS_SQL="select pg_is_in_recovery()"
-    CHECK_XLOG_REPLAY_LOC_SQL="select pg_last_xlog_replay_location()"
-    CHECK_XLOG_RECEIVE_LOC_SQL="select pg_last_xlog_receive_location()"
+    CHECK_XLOG_LOC_SQL="select pg_last_xlog_replay_location(),pg_last_xlog_receive_location()"
     CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
 
     PGSQL_STATUS_ATTR="pgsql-status"
     PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
-    PGSQL_XLOG_REPLAY_LOC_NAME="pgsql-xlog-replay-loc"
+    PGSQL_XLOG_LOC_NAME="pgsql-xlog--loc"
     PGSQL_MASTER_BASELINE="pgsql-master-baseline"
 
     HOSTNAME=`uname -n`
