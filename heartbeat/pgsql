@@ -530,10 +530,7 @@ pgsql_start() {
     change_pgsql_status "$HOSTNAME" "STOP"
     delete_master_baseline
     $CRM_MASTER -v $CAN_NOT_PROMOTE
-    rm -f ${XLOG_NOTE_FILE}.*
-    if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-        chown $OCF_RESKEY_pgdba $REP_MODE_CONF
-    fi
+    rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
     if ! make_recovery_conf || ! delete_xlog_replay_location || ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
@@ -1268,7 +1265,7 @@ delete_master_baseline() {
 set_async_mode_all() {
     [ "$OCF_RESKEY_rep_mode" = "sync" ] || return 0
     ocf_log info "Setup all nodes as an async."
-    echo "" > "$REP_MODE_CONF"
+    runasowner -q err "echo "" > \"$REP_MODE_CONF\""
     if [ $? -ne 0 ]; then
         ocf_log err "Cannot setup all nodes as an async mode."
         return 1
@@ -1355,8 +1352,8 @@ reload_conf() {
 }
 
 make_recovery_conf() {
-    touch $RECOVERY_CONF
-    if ! chown $OCF_RESKEY_pgdba $RECOVERY_CONF; then
+    runasowner "touch $RECOVERY_CONF"
+    if [ $? -ne 0 ]; then
         ocf_log err "Cannot create recovery.conf"
         return 1
     fi
@@ -1505,7 +1502,6 @@ pgsql_validate_all() {
             ocf_log err "Replication requires Master/Slave configuration"
             return $OCF_ERR_CONFIGURED
         fi
-
         if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
             return $OCF_ERR_INSTALLED
@@ -1524,13 +1520,6 @@ pgsql_validate_all() {
         fi
         if ! check_binary2 "$OCF_RESKEY_pgctldata"; then
             return $OCF_ERR_INSTALLED
-        fi
-
-        if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-            if ! touch $REP_MODE_CONF; then
-                ocf_log err "Cannot create $REP_MODE_CONF"
-                return $OCF_ERR_PERM
-            fi
         fi
     fi
 
