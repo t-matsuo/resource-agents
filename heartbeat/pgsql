@@ -1106,22 +1106,21 @@ is_master_right() {
     fi
     ocf_log info "My data status=$data_status."
 
-    old=1
-    new=1
-    for count in `seq $OCF_RESKEY_xlog_check_count`; do
-       if [ -f ${XLOG_NOTE_FILE}.$count ]; then
-           old=$count
-           continue
-       fi
-       new=$count
-       break
-    done
-
     show_xlog_replay_location
     if [ $? -ne 0 ]; then
         ocf_log err "Failed showing my xlog replay location."
         exit $OCF_ERR_GENERIC
     fi
+
+    old=0
+    for count in `seq $OCF_RESKEY_xlog_check_count`; do
+       if [ -f ${XLOG_NOTE_FILE}.$count ]; then
+           old=$count
+           continue
+       fi
+       break
+    done
+    new=`expr $old + 1`
 
     # get xlog replay locations of all nodes
     for node in ${OCF_RESKEY_node_list}; do
@@ -1138,28 +1137,29 @@ is_master_right() {
         fi
     done
 
-    if [ "$old" = "$new" ]; then
+    oldfile=`cat ${XLOG_NOTE_FILE}.${old} 2>/dev/null`
+    newfile=`cat ${XLOG_NOTE_FILE}.${new} 2>/dev/null`
+    if [ "$oldfile" != "$newfile" ]; then
+        # reset counter
+        rm -f ${XLOG_NOTE_FILE}.* 2>/dev/null
+        echo -e "$newfile" > ${XLOG_NOTE_FILE}.0
         return 1
     fi
 
-    if [ "$new" = "$OCF_RESKEY_xlog_check_count" ]; then
-       newestXlog=`cat ${XLOG_NOTE_FILE}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
-       if [ "$newestXlog" = "$mylocation" ]; then
-           ocf_log info "I have a master right."
-           $CRM_MASTER -v $PROMOTE_ME
-           return 0
-       fi
-       change_data_status "$HOSTNAME" "DISCONNECT"
-       ocf_log info "I don't have a master right."
-    else
-        oldfile=`cat ${XLOG_NOTE_FILE}.${old}`
-        newfile=`cat ${XLOG_NOTE_FILE}.${new}`
-        if [ "$oldfile" != "$newfile" ]; then
-            # reset counter
-            rm -f ${XLOG_NOTE_FILE}.*
-            echo -e "$newfile" > ${XLOG_NOTE_FILE}.1
+    if [ "$new" -ge "$OCF_RESKEY_xlog_check_count" ]; then
+        newestXlog=`cat ${XLOG_NOTE_FILE}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
+        if [ "$newestXlog" = "$mylocation" ]; then
+            ocf_log info "I have a master right."
+            $CRM_MASTER -v $PROMOTE_ME
+            return 0
         fi
+        change_data_status "$HOSTNAME" "DISCONNECT"
+        ocf_log info "I don't have a master right."
+        # reset counter
+        rm -f ${XLOG_NOTE_FILE}.*
+        echo -e "$newfile" > ${XLOG_NOTE_FILE}.0
     fi
+
     return 1
 }
 
