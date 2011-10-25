@@ -76,6 +76,7 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			ManageVE		\
 			mysql			\
 			mysql-proxy		\
+			named			\
 			nfsserver		\
 			oracle			\
 			oralsnr			\
@@ -88,10 +89,12 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			Raid1			\
 			Route			\
 			rsyncd			\
+			rsyslog			\
 			SAPDatabase		\
 			SAPInstance		\
 			SendArp			\
 			ServeRAID		\
+			slapd			\
 			SphinxSearchDaemon	\
 			Squid			\
 			Stateful		\
@@ -114,7 +117,9 @@ ocfcommondir		= $(OCF_LIB_DIR_PREFIX)/heartbeat
 ocfcommon_DATA		= ocf-shellfuncs 	\
 			  ocf-binaries	 	\
 			  ocf-directories 	\
-			  ocf-returncodes
+			  ocf-returncodes 	\
+			  apache-conf.sh 	\
+			  http-mon.sh
 
 # Legacy locations
 hbdir			= $(sysconfdir)/ha.d
