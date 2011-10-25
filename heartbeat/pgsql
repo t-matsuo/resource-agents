@@ -1136,13 +1136,13 @@ is_master_right() {
     newfile=`cat ${XLOG_NOTE_FILE}.${new} 2>/dev/null`
     if [ "$oldfile" != "$newfile" ]; then
         # reset counter
-        rm -f ${XLOG_NOTE_FILE}.* 2>/dev/null
+        rm -f ${XLOG_NOTE_FILE}.*
         echo -e "$newfile" > ${XLOG_NOTE_FILE}.0
         return 1
     fi
 
     if [ "$new" -ge "$OCF_RESKEY_xlog_check_count" ]; then
-        newestXlog=`cat ${XLOG_NOTE_FILE}.${new} | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
+        newestXlog=`echo -e "$newfile" | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
         if [ "$newestXlog" = "$mylocation" ]; then
             ocf_log info "I have a master right."
             $CRM_MASTER -v $PROMOTE_ME
