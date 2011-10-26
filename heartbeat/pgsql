@@ -553,7 +553,6 @@ pgsql_start() {
 #pgsql_promote: Promote PostgreSQL
 pgsql_promote() {
     local target
-    local output
 
     if ! is_replication; then
         ocf_log err "It's not replication mode."
