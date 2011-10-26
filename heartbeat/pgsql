@@ -1644,7 +1644,7 @@ if is_replication; then
 
     PGSQL_STATUS_ATTR="pgsql-status"
     PGSQL_DATA_STATUS_ATTR="pgsql-data-status"
-    PGSQL_XLOG_LOC_NAME="pgsql-xlog--loc"
+    PGSQL_XLOG_LOC_NAME="pgsql-xlog-loc"
     PGSQL_MASTER_BASELINE="pgsql-master-baseline"
 
     HOSTNAME=`uname -n`
