@@ -1529,6 +1529,10 @@ pgsql_validate_all() {
             ocf_log err "Replication requires Master/Slave configuration"
             return $OCF_ERR_CONFIGURED
         fi
+        if [ ! "$OCF_RESKEY_rep_mode" = "sync" -a ! "$OCF_RESKEY_rep_mode" = "async" ]; then
+            ocf_log err "Invalid rep_mode : $OCF_RESKEY_rep_mode"
+            return $OCF_ERR_CONFIGURED
+        fi
         if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
             ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist"
             return $OCF_ERR_INSTALLED
