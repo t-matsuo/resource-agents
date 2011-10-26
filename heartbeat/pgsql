@@ -433,7 +433,6 @@ pgsql_real_start() {
     local pgctl_options
     local postgres_options
     local rc
-    local cluster_state
 
     if pgsql_status; then
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
