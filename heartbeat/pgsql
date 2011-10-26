@@ -500,7 +500,7 @@ pgsql_real_start() {
     do
         pgsql_real_monitor warn
         rc=$?
-        if [ $rc -eq $OCF_RUNNING_MASTER -o $rc -eq $OCF_SUCCESS ]; then
+        if [ $rc -eq $OCF_SUCCESS -o $rc -eq $OCF_RUNNING_MASTER ]; then
             break;
         fi
         sleep 1
