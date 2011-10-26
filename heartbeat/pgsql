@@ -1430,7 +1430,7 @@ change_master_score() {
         fi
 
         current_score=`$CRM_ATTR_REBOOT -N "$1" -n "master-${rsc}:${instance}" -G -q 2>/dev/null`
-        if [ "$current_score" != "$2" ]; then
+        if [ -n "$current_score" -a "$current_score" != "$2" ]; then
             ocf_log info "Changing ${rsc}:${instance} master score on $1 : $current_score->$2."
             $CRM_ATTR_REBOOT -N "$target" -n "master-${rsc}:${instance}" -v "$2"
             if [ $? -ne 0 ]; then
