@@ -611,19 +611,16 @@ pgsql_demote() {
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     delete_master_baseline
 
-    if ! pgsql_status
-    then
+    if ! pgsql_status; then
         ocf_log info "PostgreSQL is already stopped on demote."
-        change_pgsql_status "$HOSTNAME" "STOP"
-        return $OCF_SUCCESS
-    fi
-
-    ocf_log info "Stopping PostgreSQL on demote."
-    pgsql_real_stop
-    rc=$?
-    if [ "$rc" -ne "$OCF_SUCCESS" ]; then
-        change_pgsql_status "$HOSTNAME" "UNKNOWN"
-        return $rc
+    else
+        ocf_log info "Stopping PostgreSQL on demote."
+        pgsql_real_stop
+        rc=$?
+        if [ "$rc" -ne "$OCF_SUCCESS" ]; then
+            change_pgsql_status "$HOSTNAME" "UNKNOWN"
+            return $rc
+        fi
     fi
     change_pgsql_status "$HOSTNAME" "STOP"
     set_async_mode_all
