@@ -623,8 +623,13 @@ pgsql_demote() {
         fi
     fi
     change_pgsql_status "$HOSTNAME" "STOP"
-    set_async_mode_all
-    rm -f ${XLOG_NOTE_FILE}.*
+
+    # prepare starting PostgreSQL on post-demote
+    rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
+    if ! make_recovery_conf || ! set_async_mode_all; then
+        return $OCF_ERR_GENERIC
+    fi
+
     return $OCF_SUCCESS
 }
 
@@ -866,13 +871,6 @@ pgsql_post_demote() {
             return $OCF_SUCCESS
         fi
 
-        if ! make_recovery_conf; then
-            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
-            return $OCF_ERR_GENERIC
-        fi
-
-        set_async_mode_all
-
         if [ -f $PGSQL_LOCK ]; then
             ocf_log err "My data may be inconsistent. You have to remove $PGSQL_LOCK file to force to start."
             return $OCF_ERR_GENERIC
@@ -883,7 +881,6 @@ pgsql_post_demote() {
         pgsql_real_start
         if [ $? -ne $OCF_SUCCESS ]; then
             ocf_log err "Can't start PostgreSQL as a hot standby on post-demote."
-            $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
             return $OCF_ERR_GENERIC
         fi
     else
