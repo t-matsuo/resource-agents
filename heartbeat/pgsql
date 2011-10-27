@@ -875,7 +875,6 @@ pgsql_post_demote() {
             ocf_log err "My data may be inconsistent. You have to remove $PGSQL_LOCK file to force to start."
             return $OCF_ERR_GENERIC
         fi
-        sleep 3
         is_slave_right || return $OCF_ERR_GENERIC
 
         pgsql_real_start
@@ -1007,6 +1006,7 @@ control_slave_status() {
     return 0
 }
 
+# This function is designed to be called by start and post-demote.
 is_slave_right() {
     local output
     local my_timelineid
@@ -1024,8 +1024,10 @@ is_slave_right() {
         else
             return 0
         fi
+    elif [ "$OPERATION" = "notify" -a "$OCF_RESKEY_CRM_meta_notify_type" = "post" -a "$OCF_RESKEY_CRM_meta_notify_operation" = "demote" ]; then
+        node_list=$OCF_RESKEY_CRM_meta_notify_slave_uname
     else
-        node_list=$OCF_RESKEY_node_list
+        return 1
     fi
 
     my_timelineid=`get_my_timeline_id` || return 1
@@ -1034,29 +1036,27 @@ is_slave_right() {
     newest_timelineid="0"
     newest_location="0000000000000000"
     for node in ${node_list}; do
-        if [ "$node" = "$HOSTNAME" ]; then
-            continue
-        fi
-        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
-        if [ $? -ne 0 ]; then
-            ocf_log warn "Can't get $node master baseline."
-            if [ "$OPERATION" = "start" ]; then
-                return 1
-            fi
-            continue
-        else
-            tmp_timelineid=`echo $output | cut -d ":" -f 1`
-            tmp_location=`echo $output | cut -d ":" -f 2`
-            ocf_log info "$node master baseline : $tmp_timelineid:$tmp_location"
-            # get newer location
-            cmp_location=`echo -e "$tmp_location\n$newest_checkpoint" | sort -r | head -1`
-            if [ "$cmp_location" = "$tmp_location" ]; then
-                newest_location=$tmp_location
-                if [ "$tmp_timelineid" -ge "$newest_timelineid" ]; then
-                    newest_timelineid=$tmp_timelineid
+        while :
+        do
+            output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
+            if [ $? -ne 0 ]; then
+                ocf_log warn "Can't get $node master baseline. Waiting..."
+                sleep 1
+            else
+                tmp_timelineid=`echo $output | cut -d ":" -f 1`
+                tmp_location=`echo $output | cut -d ":" -f 2`
+                ocf_log info "$node master baseline : $tmp_timelineid:$tmp_location"
+                # get newer location
+                cmp_location=`echo -e "$tmp_location\n$newest_checkpoint" | sort -r | head -1`
+                if [ "$cmp_location" = "$tmp_location" ]; then
+                    newest_location=$tmp_location
+                    if [ "$tmp_timelineid" -ge "$newest_timelineid" ]; then
+                        newest_timelineid=$tmp_timelineid
+                    fi
                 fi
+                break
             fi
-        fi
+        done
     done
 
     if [ "$my_timelineid" -gt "$newest_timelineid" ]; then
