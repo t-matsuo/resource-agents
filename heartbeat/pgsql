@@ -553,6 +553,7 @@ pgsql_start() {
 #pgsql_promote: Promote PostgreSQL
 pgsql_promote() {
     local target
+    local rc
 
     if ! is_replication; then
         ocf_log err "It's not replication mode."
@@ -571,11 +572,22 @@ pgsql_promote() {
     show_master_baseline
 
     runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
+    if [ $? -eq 0 ]; then
+        ocf_log info "PostgreSQL promote command sent."
+    else
+        ocf_log err "Can't promote PostgreSQL."
+        return $OCF_ERR_GENERIC
+    fi
+
     while :
     do
         pgsql_real_monitor warn
-        if [ $? -eq $OCF_RUNNING_MASTER ]; then
+        rc=$?
+        if [ $rc -eq $OCF_RUNNING_MASTER ]; then
             break;
+        elif [ $rc -eq $OCF_ERR_GENERIC ]; then
+            ocf_log err "Can't promote PostgreSQL."
+            return $rc
         fi
         sleep 1
         ocf_log debug "PostgreSQL still hasn't promoted yet. Waiting..."
