@@ -1047,7 +1047,7 @@ is_slave_right() {
                 tmp_location=`echo $output | cut -d ":" -f 2`
                 ocf_log info "$node master baseline : $tmp_timelineid:$tmp_location"
                 # get newer location
-                cmp_location=`echo -e "$tmp_location\n$newest_checkpoint" | sort -r | head -1`
+                cmp_location=`echo -e "$tmp_location\n$newest_location" | sort -r | head -1`
                 if [ "$cmp_location" = "$tmp_location" ]; then
                     newest_location=$tmp_location
                     if [ "$tmp_timelineid" -ge "$newest_timelineid" ]; then
