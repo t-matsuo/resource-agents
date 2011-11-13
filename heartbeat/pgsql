@@ -928,14 +928,13 @@ control_slave_status() {
     local data_status
     local target
     local all_data_status
-    local node_number
+    local tmp_data_status
     local node_name
 
     all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
     rc=$?
     if [ $rc -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
-            node_number=`echo -e "$all_data_status" | wc -l`
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
         fi
     else
@@ -950,10 +949,10 @@ control_slave_status() {
 
         data_status="DISCONNECT"
         if [ -n "$all_data_status" ]; then
-            for index in `seq $node_number`; do
-                node_name=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 1`
-                state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 2`
-                sync_state=`echo $all_data_status | cut -d " " -f $index | cut -d "|" -f 3`
+            for tmp_data_status in $all_data_status; do
+                node_name=`echo $tmp_data_status | cut -d "|" -f 1`
+                state=`echo $tmp_data_status | cut -d "|" -f 2`
+                sync_state=`echo $tmp_data_status | cut -d "|" -f 3`
                 ocf_log debug "node=$node_name, state=$state, sync_state=$sync_state"
                 if [ "$node_name" = "$target" ];then
                     data_status="$state|$sync_state"
