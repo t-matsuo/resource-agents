@@ -789,7 +789,7 @@ pgsql_real_monitor() {
     return $OCF_SUCCESS
 }
 
-#pgsql_stop: pgsql_real_monitor() wrapper for replication
+#pgsql_monitor: pgsql_real_monitor() wrapper for replication
 pgsql_monitor() {
     local rc
     local rsc
