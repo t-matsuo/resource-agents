@@ -975,7 +975,7 @@ control_slave_status() {
         fi
     else
         report_psql_error $rc warn
-        all_data_status=""
+        return 1
     fi
 
     number_of_nodes=`echo $OCF_RESKEY_node_list | sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | sed -e "s/ /\n/g" | wc -l`
