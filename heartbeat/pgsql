@@ -71,6 +71,7 @@ OCF_RESKEY_primary_conninfo_opt_default=""
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_xlog_check_count_default="3"
+OCF_RESKEY_crm_attr_timeout_default="5"
 
 : ${OCF_RESKEY_pgctl=${OCF_RESKEY_pgctl_default}}
 : ${OCF_RESKEY_psql=${OCF_RESKEY_psql_default}}
@@ -97,6 +98,7 @@ OCF_RESKEY_xlog_check_count_default="3"
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
 : ${OCF_RESKEY_pgctldata=${OCF_RESKEY_pgctldata_default}}
 : ${OCF_RESKEY_xlog_check_count=${OCF_RESKEY_xlog_check_count_default}}
+: ${OCF_RESKEY_crm_attr_timeout=${OCF_RESKEY_crm_attr_timeout_default}}
 
 usage() {
     cat <<EOF
@@ -353,6 +355,16 @@ This is optional for replication.
 </longdesc>
 <shortdesc lang="en">xlog check count</shortdesc>
 <content type="integer" default="${OCF_RESKEY_check_count_default}" />
+</parameter>
+
+<parameter name="crm_attr_timeout" unique="0" required="0">
+<longdesc lang="en">
+The timeout of crm_attribute forever update command.
+Default value is 5 seconds.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">The timeout of crm_attribute forever update command.</shortdesc>
+<content type="integer" default="${OCF_RESKEY_crm_attr_timeout_default}" />
 </parameter>
 
 </parameters>
@@ -1441,15 +1453,21 @@ change_pgsql_status() {
 # arg1:node, arg2: value
 change_data_status() {
     local output
-    output=`$CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
-    if [ "$output" != "$2" ]; then
-        ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
-        $CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -v "$2"
-        if [ $? -ne 0 ]; then
-            ocf_log err "Can't change $PGSQL_DATA_STATUS_ATTR."
-            return 1
+
+    while :
+    do
+        output=`$CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
+        if [ "$output" != "$2" ]; then
+            ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
+            exec_func_with_timeout "$CRM_ATTR_FOREVER" "-N $1 -n $PGSQL_DATA_STATUS_ATTR -v \"$2\"" $OCF_RESKEY_crm_attr_timeout
+            if [ $? -ne 0 ]; then
+                ocf_log err "Can't change $PGSQL_DATA_STATUS_ATTR."
+                return 1
+            fi
+        else
+            break
         fi
-    fi
+    done
     return 0
 }
 
@@ -1502,6 +1520,34 @@ report_psql_error()
     elif [ $rc -eq 3 ]; then
         ocf_log err "Script error (the variable ON_ERROR_STOP was set) occurred while executing the psql command."
     fi
+}
+
+#
+# timeout management function
+# arg1 : command
+# arg2 : command's args
+# arg3 : timeout(s)
+#
+exec_func_with_timeout() {
+    local func_pid
+    local count
+    local rc
+
+    $1 `eval echo $2` &
+    func_pid=$!
+    count=0
+    while kill -0 $func_pid >/dev/null 2>&1; do
+        sleep 1
+        count=`expr $count + 1`
+        if [ $count -ge $3 ]; then
+            ocf_log debug "Execute $1 time out."
+            kill -KILL $func_pid >/dev/null 2>&1
+            return 0
+        fi
+    done
+    wait $func_pid
+    rc=$?
+    return $rc
 }
 
 check_binary2() {
