@@ -532,11 +532,6 @@ pgsql_start() {
         return $?
     fi
 
-    # Check whether tmpdir is readable by pgdba user
-    if ! runasowner "test -r $OCF_RESKEY_tmpdir"; then
-        ocf_log err "Directory $OCF_RESKEY_tmpdir is not readable by $OCF_RESKEY_pgdba"
-        return $OCF_ERR_PERM
-    fi
     # initializing for replication
     change_pgsql_status "$HOSTNAME" "STOP"
     delete_master_baseline
@@ -1652,9 +1647,9 @@ pgsql_validate_all() {
             ocf_log err "Invalid rep_mode : $OCF_RESKEY_rep_mode"
             return $OCF_ERR_CONFIGURED
         fi
-        if [ ! -d "$OCF_RESKEY_tmpdir" ]; then
-            ocf_log err "$OCF_RESKEY_tmpdir directory doesn't exist."
-            return $OCF_ERR_INSTALLED
+        if ! runasowner "test -r $OCF_RESKEY_tmpdir"; then
+            ocf_log err "Directory $OCF_RESKEY_tmpdir is not readable by $OCF_RESKEY_pgdba"
+            return $OCF_ERR_PERM
         fi
         if [ ! -n "$OCF_RESKEY_master_ip" ]; then
             ocf_log err "master_ip can't be empty."
