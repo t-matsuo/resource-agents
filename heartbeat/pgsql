@@ -1599,6 +1599,8 @@ check_config() {
 
 # Validate most critical parameters
 pgsql_validate_all() {
+    local version
+
     if ! check_binary2 "$OCF_RESKEY_pgctl" || 
        ! check_binary2 "$OCF_RESKEY_psql"; then
         return $OCF_ERR_INSTALLED
@@ -1637,6 +1639,11 @@ pgsql_validate_all() {
     fi
 
     if is_replication; then
+        version=`cat $OCF_RESKEY_pgdata/PG_VERSION`
+        if [ `echo -e "$version\n9.1" | sort -n | head -1` != "9.1" ]; then
+            ocf_log err "Replication mode needs PostgreSQL 9.1 or higher."
+            return $OCF_ERR_INSTALLED
+        fi
         if ! ocf_is_ms; then
             ocf_log err "Replication requires Master/Slave configuration."
             return $OCF_ERR_CONFIGURED
