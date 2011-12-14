@@ -175,6 +175,17 @@
      <xsl:apply-templates mode="longdesc"/>
   </xsl:template>
 
+  <xsl:template match="actions" mode="description">
+    <xsl:if test="action[@name = 'migrate_from' or @name = 'migrate_to']">
+      <para>This resource agent may be configured for <emphasis>native
+      migration</emphasis> if available in the cluster manager. For
+      Pacemaker, the
+      <parameter>allow-migrate=&quot;true&quot;</parameter> meta
+      attribute enables native migration.</para>
+    </xsl:if>
+    <xsl:apply-templates mode="longdesc"/>
+  </xsl:template>
+
   <!-- Mode Parameters -->
   <xsl:template match="resource-agent" mode="parameters">
     <refsection>
@@ -249,9 +260,19 @@
       <xsl:choose>
 	  <xsl:when test="@default != ''">
 	    <xsl:text>default </xsl:text>
+	    <xsl:if test="@type = 'string'">
+	      <xsl:text>&quot;</xsl:text>
+	    </xsl:if>
 	    <code>
 	      <xsl:value-of select="@default"/>
 	    </code>
+	    <xsl:if test="@type = 'string'">
+	      <xsl:text>&quot;</xsl:text>
+	    </xsl:if>
+	  </xsl:when>
+	  <xsl:when test="@type='boolean' and @default = ''">
+	    <xsl:text>default </xsl:text>
+	    <code>false</code>
 	  </xsl:when>
 	  <xsl:otherwise>
 	    <xsl:text>no default</xsl:text>
@@ -389,7 +410,7 @@
 	</xsl:choose>
 	<!-- Insert a suggested allow-migrate meta attribute if the
 	     resource agent supports migration -->
-	<xsl:if test="actions/action/@name = 'migrate_from' or actions/action/@name = 'migrate_to'">
+	<xsl:if test="actions/action[@name = 'migrate_from' or @name = 'migrate_to']">
 	  <xsl:text>
   meta allow-migrate="true" \</xsl:text>
 	</xsl:if>

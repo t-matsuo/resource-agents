@@ -35,7 +35,7 @@
 usage() {
   methods=`LVM_methods`
   methods=`echo $methods | tr ' ' '|'`
-  cat <<-!
+  cat <<EOF
 	usage: $0 $methods
 
 	$0 manages an  Linux Volume Manager volume (LVM) as an HA resource
@@ -45,13 +45,14 @@ usage() {
 	The 'status' operation reports whether the volume is available
 	The 'monitor' operation reports whether the volume seems present
 	The 'validate-all' operation checks whether the OCF parameters are valid
+	The 'meta-data' operation show meta data 
 	The 'methods' operation reports on the methods $0 supports
 
-	!
+EOF
 }
 
 meta_data() {
-	cat <<END
+	cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
 <resource-agent name="LVM">
@@ -76,7 +77,7 @@ The name of volume group.
 If set, the volume group will be activated exclusively.
 </longdesc>
 <shortdesc lang="en">Exclusive activation</shortdesc>
-<content type="string" default="false" />
+<content type="boolean" default="false" />
 </parameter>
 
 <parameter name="partial_activation" unique="0" required="0">
@@ -101,22 +102,23 @@ logical volumes.
 <action name="validate-all" timeout="5" />
 </actions>
 </resource-agent>
-END
+EOF
 }
 
 #
 # methods: What methods/operations do we support?
 #
 LVM_methods() {
-  cat <<-!
+  cat <<EOF
 	start
 	stop
 	status
 	monitor
 	methods
 	validate-all
+	meta-data
 	usage
-	!
+EOF
 }
 
 #
@@ -160,12 +162,14 @@ LVM_status() {
   fi
 
   # Report on LVM volume status to stdout...
-  if
-    echo "$VGOUT" | grep -i 'Access.*read/write' >/dev/null
-  then
-    ocf_log debug "Volume $1 is available read/write (running)"
-  else
-    ocf_log debug "Volume $1 is available read-only (running)"
+  if [ $rc -eq 0 ]; then
+    if
+    	echo "$VGOUT" | grep -i 'Access.*read/write' >/dev/null
+    then
+    	ocf_log debug "Volume $1 is available read/write (running)"
+    else
+    	ocf_log debug "Volume $1 is available read-only (running)"
+    fi
   fi
  
   return $OCF_SUCCESS
@@ -201,6 +205,8 @@ LVM_monitor() {
 #	Enable LVM volume
 #
 LVM_start() {
+  local vgchange_options
+  local active_mode
 
   # TODO: This MUST run vgimport as well
 
@@ -215,13 +221,20 @@ LVM_start() {
   active_mode="ly"
   if ocf_is_true "$OCF_RESKEY_exclusive" ; then
   	active_mode="ey"
-  fi	
-  partial_active=""
+  fi
+  vgchange_options="-a $active_mode"
+
   if ocf_is_true "$OCF_RESKEY_partial_activation" ; then
-	partial_active="--partial"
+	vgchange_options="$vgchange_options --partial"
   fi
 
-  ocf_run vgchange -a $active_mode $partial_active $1 || return $OCF_ERR_GENERIC
+  # for clones (clustered volume groups), we'll also have to force
+  # monitoring, even if disabled in lvm.conf.
+  if ocf_is_clone; then
+	vgchange_options="$vgchange_options --monitor y"
+  fi
+
+  ocf_run vgchange $vgchange_options $1 || return $OCF_ERR_GENERIC
 
   if LVM_status $1; then
     : OK Volume $1 activated just fine!
@@ -312,9 +325,7 @@ esac
 if 
   [ -z "$OCF_RESKEY_volgrpname" ]
 then
-#  echo "You must identify the volume group name!"
   ocf_log err "You must identify the volume group name!"
-#  usage
   exit $OCF_ERR_CONFIGURED 
 fi
 

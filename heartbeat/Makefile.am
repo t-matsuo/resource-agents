@@ -49,6 +49,7 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			anything		\
 			AoEtarget		\
 			apache			\
+			asterisk		\
 			nginx			\
 			AudibleAlarm		\
 			conntrackd		\
@@ -106,6 +107,7 @@ ocf_SCRIPTS	     =  ClusterMon		\
 			tomcat			\
 			VIPArip			\
 			VirtualDomain		\
+			varnish			\
 			vmware			\
 			WAS			\
 			WAS6			\
