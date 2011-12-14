@@ -1337,7 +1337,6 @@ set_async_mode() {
 
     sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
-        echo "1=$1, conf=$sync_node_in_conf" 1>&2
         if ! echo $sync_node_in_conf | grep "$1"; then
             ocf_log info "$1 is already an async mode."
             return 0
