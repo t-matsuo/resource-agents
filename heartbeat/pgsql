@@ -904,7 +904,7 @@ pgsql_pre_promote() {
     local cmp_location
     local number_of_nodes
 
-    # If my data is newer then new master's one, I fails my resource.
+    # If my data is newer than new master's one, I fails my resource.
     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
     number_of_nodes=`echo $OCF_RESKEY_node_list | sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | sed -e "s/ /\n/g" | wc -l`
     if [ $number_of_nodes -ge 3 -a "$OCF_RESKEY_rep_mode" = "sync" -a "$PROMOTE_NODE" != "$HOSTNAME" ]; then
@@ -915,7 +915,7 @@ pgsql_pre_promote() {
             # get older location
             cmp_location=`echo -e "$master_baseline\n$my_master_baseline" | sort | head -1`
             if [ "$cmp_location" != "$my_master_baseline" ]; then
-                ocf_log err "My data is newer then new master's one. New master's location : $master_baseline"
+                ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
                 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
                 return $OCF_ERR_GENERIC
             fi
@@ -1107,7 +1107,7 @@ is_slave_right() {
     done
 
     if [ "$my_timelineid" -gt "$newest_timelineid" ]; then
-        ocf_log info "My Timeline ID is newer then Master's."
+        ocf_log info "My Timeline ID is newer than Master's."
         return 0
     fi
     if [ "$my_timelineid" -lt "$newest_timelineid" ]; then
