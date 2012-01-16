@@ -1438,6 +1438,15 @@ change_pgsql_status() {
 
     output=`$CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -G -q`
     if [ "$output" != "$2" ]; then
+        # If slave's disk is broken, RA cannot read PID file
+        # and misjudges the PostgreSQL is down whether it is running.
+        # It causes overwriting pgsql-status by Master because replication is still connected.
+        if [ "$output" = "STOP" -o "$output" = "UNKNOWN" ]; then
+            if [ "$1" != "$HOSTNAME" ]; then
+                ocf_log warn "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2 by $HOSTNAME is prohibited."
+                return 0
+            fi
+        fi
         ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
         $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -v "$2"
         if [ $? -ne 0 ]; then
