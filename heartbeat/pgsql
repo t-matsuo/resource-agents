@@ -891,7 +891,9 @@ pgsql_post_demote() {
             return $OCF_ERR_GENERIC
         fi
     else
-        show_master_baseline
+        if ! echo $OCF_RESKEY_CRM_meta_notify_master_uname | grep $HOSTNAME; then
+            show_master_baseline
+        fi
     fi
 
     change_pgsql_status "$HOSTNAME" "HS:alone"
