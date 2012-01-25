@@ -1569,7 +1569,7 @@ exec_func_with_timeout() {
 }
 
 is_node_online() {
-    crm_mon -1 -n | grep -e "^Node $1 " | grep -q -v "OFFLINE"
+    crm_mon -1 -n | grep -e "^Node $1 " -e "^Node $1:" | grep -q -v "OFFLINE"
     return $?
 }
 
