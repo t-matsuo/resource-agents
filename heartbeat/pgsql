@@ -267,6 +267,8 @@ Replication mode(none(default)/async/sync).
 If you use async or sync, it requires node_list, master_ip, restore_command
 parameters, and needs setting postgresql.conf, pg_hba.conf up for
 replication.
+Please delete "include /../../rep_mode.conf" line in postgresql.conf
+when you switch from sync to async.
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
 <content type="string" default="${OCF_RESKEY_rep_mode_default}" />
@@ -1675,6 +1677,11 @@ pgsql_validate_all() {
         fi
         if ! check_binary2 "$OCF_RESKEY_pgctldata"; then
             return $OCF_ERR_INSTALLED
+        fi
+        if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+            if ! grep -q "include '$REP_MODE_CONF' # added by pgsql RA" $OCF_RESKEY_pgdata/postgresql.conf; then
+                echo "include '$REP_MODE_CONF' # added by pgsql RA" >> $OCF_RESKEY_pgdata/postgresql.conf
+            fi
         fi
     fi
 
