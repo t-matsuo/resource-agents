@@ -68,7 +68,7 @@ OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_repuser_default="postgres"
 OCF_RESKEY_stop_on_demote_default="no"
 OCF_RESKEY_primary_conninfo_opt_default=""
-OCF_RESKEY_tmpdir_default="/var/lib/pgsql"
+OCF_RESKEY_tmpdir_default="/var/lib/pgsql/tmp"
 OCF_RESKEY_pgctldata_default=/usr/bin/pg_controldata
 OCF_RESKEY_xlog_check_count_default="3"
 OCF_RESKEY_crm_attr_timeout_default="5"
@@ -1659,10 +1659,6 @@ pgsql_validate_all() {
             ocf_log err "Invalid rep_mode : $OCF_RESKEY_rep_mode"
             return $OCF_ERR_CONFIGURED
         fi
-        if ! runasowner "test -r $OCF_RESKEY_tmpdir"; then
-            ocf_log err "Directory $OCF_RESKEY_tmpdir is not readable by $OCF_RESKEY_pgdba"
-            return $OCF_ERR_PERM
-        fi
         if [ ! -n "$OCF_RESKEY_master_ip" ]; then
             ocf_log err "master_ip can't be empty."
             return $OCF_ERR_CONFIGURED
@@ -1682,6 +1678,10 @@ pgsql_validate_all() {
             if ! grep -q "include '$REP_MODE_CONF' # added by pgsql RA" $OCF_RESKEY_pgdata/postgresql.conf; then
                 echo "include '$REP_MODE_CONF' # added by pgsql RA" >> $OCF_RESKEY_pgdata/postgresql.conf
             fi
+        fi
+        if ! mkdir -p $OCF_RESKEY_tmpdir || ! chown $OCF_RESKEY_pgdba $OCF_RESKEY_tmpdir || ! chmod 700 $OCF_RESKEY_tmpdir; then
+            ocf_log err "Can't create directory $OCF_RESKEY_tmpdir or it is not readable by $OCF_RESKEY_pgdba"
+            return $OCF_ERR_PERM
         fi
     fi
 
