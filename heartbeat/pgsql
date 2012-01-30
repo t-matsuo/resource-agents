@@ -769,24 +769,20 @@ pgsql_real_monitor() {
 	return $OCF_NOT_RUNNING
     fi
 
-    if ! is_replication; then
-        OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
-        runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
-        rc=$?
-    else
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_MS_SQL}\""`
-        rc=$?
-    fi
-
-    if [ $rc -ne  0 ]; then
-        report_psql_error $rc $loglevel
-        return $OCF_ERR_GENERIC
-    fi
-
     if is_replication; then
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_MS_SQL}\""`
+        rc=$?
+        if [ $rc -ne  0 ]; then
+            report_psql_error $rc $loglevel
+            return $OCF_ERR_GENERIC
+        fi
+
         case "$output" in
             f)  ocf_log debug "PostgreSQL is running as a primary."
-                return $OCF_RUNNING_MASTER;;
+                if [ "$OCF_RESKEY_monitor_sql" = "$OCF_RESKEY_monitor_sql_default" ]; then
+                    return $OCF_RUNNING_MASTER
+                fi
+                ;;
 
             t)  ocf_log debug "PostgreSQL is running as a hot standby."
                 return $OCF_SUCCESS;;
@@ -796,6 +792,17 @@ pgsql_real_monitor() {
         esac
     fi
 
+    OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
+    runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
+    rc=$?
+    if [ $rc -ne  0 ]; then
+        report_psql_error $rc $loglevel
+        return $OCF_ERR_GENERIC
+    fi
+
+    if is_replication; then
+        return $OCF_RUNNING_MASTER
+    fi
     return $OCF_SUCCESS
 }
 
@@ -978,7 +985,7 @@ control_slave_status() {
     local node_name
     local number_of_nodes
 
-    all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
+    all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
     rc=$?
     if [ $rc -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
@@ -1251,7 +1258,7 @@ get_my_location() {
     local log2
     local newer_location
 
-    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -Atc \"${CHECK_XLOG_LOC_SQL}\""`
+    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_XLOG_LOC_SQL}\""`
     rc=$?
     if [ $rc -ne 0 ]; then
         report_psql_error $rc warn
@@ -1308,7 +1315,7 @@ show_master_baseline() {
     local location
     local timelineid
 
-    runasowner -q err "$OCF_RESKEY_psql $psql_options -c 'CHECKPOINT'"
+    runasowner -q err "$OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -c 'CHECKPOINT'"
     rc=$?
     if [ $rc -ne 0 ]; then
         report_psql_error $rc warn
