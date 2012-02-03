@@ -1674,10 +1674,6 @@ pgsql_validate_all() {
             ocf_log err "node_list can't be empty."
             return $OCF_ERR_CONFIGURED
         fi
-        if [ ! -n "$OCF_RESKEY_restore_command" ]; then
-            ocf_log err "restore_command can't be empty."
-            return $OCF_ERR_CONFIGURED
-        fi
         if ! check_binary2 "$OCF_RESKEY_pgctldata"; then
             return $OCF_ERR_INSTALLED
         fi
