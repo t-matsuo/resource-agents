@@ -102,9 +102,9 @@ OCF_RESKEY_crm_attr_timeout_default="5"
 
 usage() {
     cat <<EOF
-	usage: $0 start|stop|status|monitor|promote|demote|notify|meta-data|validate-all|methods
+        usage: $0 start|stop|status|monitor|promote|demote|notify|meta-data|validate-all|methods
 
-	$0 manages a PostgreSQL Server as an HA resource.
+        $0 manages a PostgreSQL Server as an HA resource.
 
         The 'start' operation starts the PostgreSQL server.
         The 'stop' operation stops the PostgreSQL server.
@@ -119,7 +119,7 @@ EOF
 }
 
 meta_data() {
-	cat <<EOF
+    cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
 <resource-agent name="pgsql">
@@ -390,7 +390,7 @@ EOF
 
 
 #
-#	Run the given command in the Resource owner environment...
+#   Run the given command in the Resource owner environment...
 #
 runasowner() {
     local quietrun=""
@@ -427,17 +427,17 @@ escape_string() {
 #
 
 pgsql_methods() {
-  cat <<EOF
-	start
-	stop
-	status
-	monitor
-	promote
-	demote
-	notify
-	methods
-	meta-data
-	validate-all
+    cat <<EOF
+    start
+    stop
+    status
+    monitor
+    promote
+    demote
+    notify
+    methods
+    meta-data
+    validate-all
 EOF
 }
 
@@ -462,8 +462,8 @@ pgsql_real_start() {
 
     # Remove backup_label if it exists
     if [ -f $BACKUPLABEL ] && ! is_replication; then
-	ocf_log info "Removing $BACKUPLABEL. The previous backup might have failed."
-	rm -f $BACKUPLABEL
+        ocf_log info "Removing $BACKUPLABEL. The previous backup might have failed."
+        rm -f $BACKUPLABEL
     fi
 
     # Check if we need to create a log file
@@ -503,7 +503,7 @@ pgsql_real_start() {
     runasowner "$OCF_RESKEY_pgctl $pgctl_options start"
 
     if [ $? -eq 0 ]; then
-	# Probably started.....
+        # Probably started.....
         ocf_log info "PostgreSQL start command sent."
     else
         ocf_log err "Can't start PostgreSQL."
