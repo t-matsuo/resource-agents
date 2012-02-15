@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # Description:  Manages a PostgreSQL Server as an OCF High-Availability
 #               resource
