@@ -1122,7 +1122,7 @@ is_slave_right() {
         ocf_log info "My Timeline ID is newer than Master's."
         return 0
     fi
-    if [ "$my_timelineid" -lt "$newest_timelineid" ]; then
+    if [ "$OCF_RESKEY_stop_on_demote" = "no" -a "$my_timelineid" -lt "$newest_timelineid" ]; then
         ocf_log err "My data may be inconsistent because my Timeline ID is too old."
         return 1
     fi
