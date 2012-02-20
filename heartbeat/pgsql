@@ -613,7 +613,7 @@ pgsql_demote() {
     local rc
 
     if ! is_replication; then
-        ocf_log err "Not a replication mode."
+        ocf_log err "Not in a replication mode."
         return $OCF_ERR_CONFIGURED
     fi
 
@@ -1119,7 +1119,7 @@ is_slave_right() {
     done
 
     if [ "$my_timelineid" -gt "$newest_timelineid" ]; then
-        ocf_log info "My Timeline ID is newer than Master's."
+        ocf_log info "My Timeline ID is newer than Master's baseline."
         return 0
     fi
     if [ "$OCF_RESKEY_stop_on_demote" = "no" -a "$my_timelineid" -lt "$newest_timelineid" ]; then
