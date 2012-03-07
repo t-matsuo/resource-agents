@@ -681,7 +681,7 @@ pgsql_real_stop() {
             runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
         fi
     else
-        ocf_log info "Stooping PostgreSQL using -m immediate."
+        ocf_log info "Stopping PostgreSQL using -m immediate."
         runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
     fi
 
