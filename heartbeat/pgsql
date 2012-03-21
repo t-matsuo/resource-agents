@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Description:  Manages a PostgreSQL Server as an OCF High-Availability
 #               resource
@@ -877,7 +877,7 @@ pgsql_pre_promote() {
         if [ $? -eq 0 ]; then
             my_master_baseline=`$CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
             # get older location
-            cmp_location=`echo -e "$master_baseline\n$my_master_baseline" | sort | head -1`
+            cmp_location=`printf "$master_baseline\n$my_master_baseline\n" | sort | head -1`
             if [ "$cmp_location" != "$my_master_baseline" ]; then
                 ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
                 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
@@ -1081,12 +1081,12 @@ have_master_right() {
     if [ "$oldfile" != "$newfile" ]; then
         # reset counter
         rm -f ${XLOG_NOTE_FILE}.*
-        echo -e "$newfile" > ${XLOG_NOTE_FILE}.0
+        printf "$newfile\n" > ${XLOG_NOTE_FILE}.0
         return 1
     fi
 
     if [ "$new" -ge "$OCF_RESKEY_xlog_check_count" ]; then
-        newestXlog=`echo -e "$newfile" | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
+        newestXlog=`printf "$newfile\n" | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
         if [ "$newestXlog" = "$mylocation" ]; then
             ocf_log info "I have a master right."
             $CRM_MASTER -v $PROMOTE_ME
@@ -1096,7 +1096,7 @@ have_master_right() {
         ocf_log info "I don't have correct master data."
         # reset counter
         rm -f ${XLOG_NOTE_FILE}.*
-        echo -e "$newfile" > ${XLOG_NOTE_FILE}.0
+        printf "$newfile\n" > ${XLOG_NOTE_FILE}.0
     fi
 
     return 1
@@ -1142,7 +1142,7 @@ get_my_location() {
     log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
     receive_loc="${log1}${log2}"
 
-    newer_location=`echo -e "$replay_loc\n$receive_loc" | sort -r | head -1`
+    newer_location=`printf "$replay_loc\n$receive_loc" | sort -r | head -1`
     echo "$newer_location"
     return 0
 }
@@ -1502,7 +1502,7 @@ pgsql_validate_all() {
 
     if is_replication; then
         version=`cat $OCF_RESKEY_pgdata/PG_VERSION`
-        if [ `echo -e "$version\n9.1" | sort -n | head -1` != "9.1" ]; then
+        if [ `printf "$version\n9.1" | sort -n | head -1` != "9.1" ]; then
             ocf_log err "Replication mode needs PostgreSQL 9.1 or higher."
             return $OCF_ERR_INSTALLED
         fi
