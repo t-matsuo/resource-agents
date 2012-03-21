@@ -7,7 +7,7 @@
 #               Florian Haas (florian@linbit.com) -- makeover
 #               Takatoshi MATSUO (matsuo.tak@gmail.com) -- support replication
 #
-# Copyright:    2006-2010 Serge Dubrouski <sergeyfd@gmail.com>
+# Copyright:    2006-2012 Serge Dubrouski <sergeyfd@gmail.com>
 #                         and other Linux-HA contributors
 # License:      GNU General Public License (GPL)
 #
@@ -753,7 +753,9 @@ pgsql_real_monitor() {
 
     if is_replication; then
         #Check replication state
-        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_MS_SQL}\""`
+        output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
+                $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
+                -Atc \"${CHECK_MS_SQL}\""`
         rc=$?
         if [ $rc -ne  0 ]; then
             report_psql_error $rc $loglevel
@@ -776,7 +778,8 @@ pgsql_real_monitor() {
     fi
 
     OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
-    runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options -c '$OCF_RESKEY_monitor_sql'"
+    runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options \
+                  -c '$OCF_RESKEY_monitor_sql'"
     rc=$?
     if [ $rc -ne  0 ]; then
         report_psql_error $rc $loglevel
@@ -842,7 +845,8 @@ pgsql_monitor() {
             rm -f ${XLOG_NOTE_FILE}.*
         fi
     else
-        output=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
+        output=`$CRM_ATTR_FOREVER -N "$HOSTNAME" \
+                -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
             change_pgsql_status "$HOSTNAME" "HS:alone"
         fi
@@ -870,14 +874,22 @@ pgsql_pre_promote() {
     local number_of_nodes
 
     # If my data is newer than new master's one, I fail my resource.
-    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
-    number_of_nodes=`echo $OCF_RESKEY_node_list | sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | sed -e "s/ /\n/g" | wc -l`
-    if [ $number_of_nodes -ge 3 -a "$OCF_RESKEY_rep_mode" = "sync" -a "$PROMOTE_NODE" != "$HOSTNAME" ]; then
-        master_baseline=`$CRM_ATTR_REBOOT -N "$PROMOTE_NODE" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
+    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | \
+                  sed "s/ /\n/g" | head -1`
+    number_of_nodes=`echo $OCF_RESKEY_node_list | \
+                  sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | \
+                  sed -e "s/ /\n/g" | wc -l`
+    if [ $number_of_nodes -ge 3 -a \
+         "$OCF_RESKEY_rep_mode" = "sync" -a \
+         "$PROMOTE_NODE" != "$HOSTNAME" ]; then
+        master_baseline=`$CRM_ATTR_REBOOT -N "$PROMOTE_NODE" -n \
+                         "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
         if [ $? -eq 0 ]; then
-            my_master_baseline=`$CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
+            my_master_baseline=`$CRM_ATTR_REBOOT -N "$HOSTNAME" -n \
+                                "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
             # get older location
-            cmp_location=`printf "$master_baseline\n$my_master_baseline\n" | sort | head -1`
+            cmp_location=`printf "$master_baseline\n$my_master_baseline\n" |\
+                          sort | head -1`
             if [ "$cmp_location" != "$my_master_baseline" ]; then
                 ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
                 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
@@ -907,7 +919,8 @@ pgsql_notify() {
             case $op in
                 promote)
                     delete_xlog_location
-                    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | sed "s/ /\n/g" | head -1`
+                    PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | \
+                                  sed "s/ /\n/g" | head -1`
                     if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
                         delete_master_baseline
                     fi
@@ -938,7 +951,9 @@ control_slave_status() {
     local node_name
     local number_of_nodes
 
-    all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
+    all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
+                     $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
+                     -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
     rc=$?
     if [ $rc -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
@@ -949,7 +964,9 @@ control_slave_status() {
         return 1
     fi
 
-    number_of_nodes=`echo $OCF_RESKEY_node_list | sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | sed -e "s/ /\n/g" | wc -l`
+    number_of_nodes=`echo $OCF_RESKEY_node_list | \
+                     sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | \
+                     sed -e "s/ /\n/g" | wc -l`
     for target in $OCF_RESKEY_node_list; do
         if [ "$target" = "$HOSTNAME" ]; then
             continue
@@ -1000,14 +1017,16 @@ control_slave_status() {
             "DISCONNECT")
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
-                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && is_sync_mode "$target"; then
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && \
+                   is_sync_mode "$target"; then
                     set_async_mode "$target"
                 fi
                 ;;
             *)
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
-                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && is_sync_mode "$target"; then
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && \
+                    is_sync_mode "$target"; then
                     set_async_mode "$target"
                 fi
                 change_pgsql_status "$target" "HS:connected"
@@ -1031,14 +1050,18 @@ have_master_right() {
 
     ocf_log debug "Checking if master is right."
 
-    data_status=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
+    data_status=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n \
+                 "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
-        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a "$data_status" != "LATEST" ]; then
+        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a \
+             "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
     else
-        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a "$data_status" != "STREAMING|ASYNC" -a "$data_status" != "LATEST" ]; then
+        if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a \
+             "$data_status" != "STREAMING|ASYNC" -a \
+             "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
@@ -1063,7 +1086,8 @@ have_master_right() {
 
     # get xlog locations of all nodes
     for node in ${OCF_RESKEY_node_list}; do
-        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_XLOG_LOC_NAME" -G -q 2>/dev/null`
+        output=`$CRM_ATTR_REBOOT -N "$node" -n \
+                "$PGSQL_XLOG_LOC_NAME" -G -q 2>/dev/null`
         if [ $? -ne 0 ]; then
             ocf_log warn "Can't get $node xlog location."
             continue
@@ -1086,7 +1110,8 @@ have_master_right() {
     fi
 
     if [ "$new" -ge "$OCF_RESKEY_xlog_check_count" ]; then
-        newestXlog=`printf "$newfile\n" | sort -t " " -k 2,3 -r | head -1 | cut -d " " -f 2`
+        newestXlog=`printf "$newfile\n" | sort -t " " -k 2,3 -r | \
+                    head -1 | cut -d " " -f 2`
         if [ "$newestXlog" = "$mylocation" ]; then
             ocf_log info "I have a master right."
             $CRM_MASTER -v $PROMOTE_ME
@@ -1120,7 +1145,9 @@ get_my_location() {
     local log2
     local newer_location
 
-    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -Atc \"${CHECK_XLOG_LOC_SQL}\""`
+    output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
+            $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
+            -Atc \"${CHECK_XLOG_LOC_SQL}\""`
     rc=$?
     if [ $rc -ne 0 ]; then
         report_psql_error $rc warn
@@ -1164,7 +1191,8 @@ show_master_baseline() {
     local rc
     local location
 
-    runasowner -q err "$OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba -c 'CHECKPOINT'"
+    runasowner -q err "$OCF_RESKEY_psql $psql_options \
+                       -U $OCF_RESKEY_pgdba -c 'CHECKPOINT'"
     rc=$?
     if [ $rc -ne 0 ]; then
         report_psql_error $rc warn
@@ -1201,7 +1229,8 @@ set_async_mode() {
             return 0
         else
             ocf_log info "Setup $1 into async mode."
-            sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |  sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
+            sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |\
+                               sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
             if [ -n $sync_node_in_conf ]; then
                 echo "synchronous_standby_names = '$sync_node_in_conf'" > "$REP_MODE_CONF"
             else
@@ -1330,7 +1359,9 @@ change_data_status() {
         output=`$CRM_ATTR_FOREVER -N "$1" -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" != "$2" ]; then
             ocf_log info "Changing $PGSQL_DATA_STATUS_ATTR on $1 : $output->$2."
-            exec_func_with_timeout "$CRM_ATTR_FOREVER" "-N $1 -n $PGSQL_DATA_STATUS_ATTR -v \"$2\"" $OCF_RESKEY_crm_attr_timeout
+            exec_func_with_timeout "$CRM_ATTR_FOREVER" "-N $1 -n \
+                                    $PGSQL_DATA_STATUS_ATTR -v \"$2\"" \
+                                    $OCF_RESKEY_crm_attr_timeout
             if [ $? -ne 0 ]; then
                 ocf_log err "Can't change $PGSQL_DATA_STATUS_ATTR."
                 return 1
