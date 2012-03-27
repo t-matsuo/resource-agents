@@ -1447,7 +1447,7 @@ exec_func_with_timeout() {
         count=`expr $count + 1`
         if [ $count -ge $3 ]; then
             ocf_log debug "Execute $1 time out."
-            kill -KILL $func_pid >/dev/null 2>&1
+            kill -9 $func_pid >/dev/null 2>&1
             return 0
         fi
     done
