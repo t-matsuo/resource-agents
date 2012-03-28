@@ -522,7 +522,7 @@ pgsql_start() {
     fi
 
     # initializing for replication
-    change_pgsql_status "$HOSTNAME" "STOP"
+    change_pgsql_status "$NODENAME" "STOP"
     delete_master_baseline
     $CRM_MASTER -v $CAN_NOT_PROMOTE
     rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
@@ -540,7 +540,7 @@ pgsql_start() {
     if [ $? -ne $OCF_SUCCESS ]; then
         return $OCF_ERR_GENERIC
     fi
-    change_pgsql_status "$HOSTNAME" "HS:alone"
+    change_pgsql_status "$NODENAME" "HS:alone"
     return $OCF_SUCCESS
 }
 
@@ -556,7 +556,7 @@ pgsql_promote() {
     rm -f ${XLOG_NOTE_FILE}.*
 
     for target in $OCF_RESKEY_node_list; do
-        [ "$target" = "$HOSTNAME" ] && continue
+        [ "$target" = "$NODENAME" ] && continue
         change_data_status "$target" "DISCONNECT"
         change_master_score "$target" "$CAN_NOT_PROMOTE"
     done
@@ -588,9 +588,9 @@ pgsql_promote() {
     done
     ocf_log info "PostgreSQL is promoted."
 
-    change_data_status "$HOSTNAME" "LATEST"
+    change_data_status "$NODENAME" "LATEST"
     $CRM_MASTER -v $PROMOTE_ME
-    change_pgsql_status "$HOSTNAME" "PRI"
+    change_pgsql_status "$NODENAME" "PRI"
     return $OCF_SUCCESS
 }
 
@@ -613,11 +613,11 @@ pgsql_demote() {
         pgsql_real_stop master
         rc=$?
         if [ "$rc" -ne "$OCF_SUCCESS" ]; then
-            change_pgsql_status "$HOSTNAME" "UNKNOWN"
+            change_pgsql_status "$NODENAME" "UNKNOWN"
             return $rc
         fi
     fi
-    change_pgsql_status "$HOSTNAME" "STOP"
+    change_pgsql_status "$NODENAME" "STOP"
     return $OCF_SUCCESS
 }
 
@@ -700,18 +700,18 @@ pgsql_stop() {
     if ! pgsql_status
     then
         ocf_log info "PostgreSQL is already stopped."
-        change_pgsql_status "$HOSTNAME" "STOP"
+        change_pgsql_status "$NODENAME" "STOP"
         return $OCF_SUCCESS
     fi
 
     pgsql_real_stop slave
     rc=$?
     if [ $rc -ne $OCF_SUCCESS ]; then
-        change_pgsql_status "$HOSTNAME" "UNKNOWN"
+        change_pgsql_status "$NODENAME" "UNKNOWN"
         return $rc
     fi
 
-    change_pgsql_status "$HOSTNAME" "STOP"
+    change_pgsql_status "$NODENAME" "STOP"
     set_async_mode_all
     delete_master_baseline
     return $OCF_SUCCESS
@@ -812,8 +812,8 @@ pgsql_monitor() {
 
     # If I am Master
     if [ $rc -eq $OCF_RUNNING_MASTER ]; then
-        change_data_status "$HOSTNAME" "LATEST"
-        change_pgsql_status "$HOSTNAME" "PRI"
+        change_data_status "$NODENAME" "LATEST"
+        change_pgsql_status "$NODENAME" "PRI"
         control_slave_status || return $OCF_ERR_GENERIC
         return $rc
     fi
@@ -839,16 +839,16 @@ pgsql_monitor() {
     if [ ! -n "$is_master" ]; then
         # If I am Slave and Master is not exist
         ocf_log info "Master does not exist."
-        change_pgsql_status "$HOSTNAME" "HS:alone"
+        change_pgsql_status "$NODENAME" "HS:alone"
         have_master_right
         if [ $? -eq 0 ]; then
             rm -f ${XLOG_NOTE_FILE}.*
         fi
     else
-        output=`$CRM_ATTR_FOREVER -N "$HOSTNAME" \
+        output=`$CRM_ATTR_FOREVER -N "$NODENAME" \
                 -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
-            change_pgsql_status "$HOSTNAME" "HS:alone"
+            change_pgsql_status "$NODENAME" "HS:alone"
         fi
     fi
     return $rc
@@ -858,10 +858,10 @@ pgsql_monitor() {
 pgsql_post_demote() {
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1`
     ocf_log debug "post-demote called. Demote uname is $DEMOTE_NODE"
-    if [ "$DEMOTE_NODE" != "$HOSTNAME" ]; then
-        if ! echo $OCF_RESKEY_CRM_meta_notify_master_uname | grep $HOSTNAME; then
+    if [ "$DEMOTE_NODE" != "$NODENAME" ]; then
+        if ! echo $OCF_RESKEY_CRM_meta_notify_master_uname | grep $NODENAME; then
             show_master_baseline
-            change_pgsql_status "$HOSTNAME" "HS:alone"
+            change_pgsql_status "$NODENAME" "HS:alone"
         fi
     fi
     return $OCF_SUCCESS
@@ -881,18 +881,18 @@ pgsql_pre_promote() {
                   sed -e "s/ /\n/g" | wc -l`
     if [ $number_of_nodes -ge 3 -a \
          "$OCF_RESKEY_rep_mode" = "sync" -a \
-         "$PROMOTE_NODE" != "$HOSTNAME" ]; then
+         "$PROMOTE_NODE" != "$NODENAME" ]; then
         master_baseline=`$CRM_ATTR_REBOOT -N "$PROMOTE_NODE" -n \
                          "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
         if [ $? -eq 0 ]; then
-            my_master_baseline=`$CRM_ATTR_REBOOT -N "$HOSTNAME" -n \
+            my_master_baseline=`$CRM_ATTR_REBOOT -N "$NODENAME" -n \
                                 "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
             # get older location
             cmp_location=`printf "$master_baseline\n$my_master_baseline\n" |\
                           sort | head -1`
             if [ "$cmp_location" != "$my_master_baseline" ]; then
                 ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
-                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $HOSTNAME -v INFINITY
+                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $NODENAME -v INFINITY
                 return $OCF_ERR_GENERIC
             fi
         fi
@@ -921,7 +921,7 @@ pgsql_notify() {
                     delete_xlog_location
                     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | \
                                   sed "s/ /\n/g" | head -1`
-                    if [ "$PROMOTE_NODE" != "$HOSTNAME" ]; then
+                    if [ "$PROMOTE_NODE" != "$NODENAME" ]; then
                         delete_master_baseline
                     fi
                     return $OCF_SUCCESS
@@ -931,7 +931,7 @@ pgsql_notify() {
                     return $?
                     ;;
                 start|stop)
-                    if [ "$HOSTNAME " = "$OCF_RESKEY_CRM_meta_notify_master_uname" ]; then
+                    if [ "$NODENAME " = "$OCF_RESKEY_CRM_meta_notify_master_uname" ]; then
                         control_slave_status
                     fi
                     return $OCF_SUCCESS
@@ -968,7 +968,7 @@ control_slave_status() {
                      sed -e "s/  */ /g" | sed -e "s/^ \| $//g" | \
                      sed -e "s/ /\n/g" | wc -l`
     for target in $OCF_RESKEY_node_list; do
-        if [ "$target" = "$HOSTNAME" ]; then
+        if [ "$target" = "$NODENAME" ]; then
             continue
         fi
 
@@ -1050,7 +1050,7 @@ have_master_right() {
 
     ocf_log debug "Checking if master is right."
 
-    data_status=`$CRM_ATTR_FOREVER -N "$HOSTNAME" -n \
+    data_status=`$CRM_ATTR_FOREVER -N "$NODENAME" -n \
                  "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
         if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a \
@@ -1094,7 +1094,7 @@ have_master_right() {
         else
             ocf_log info "$node xlog location : $output"
             echo "$node $output" >> ${XLOG_NOTE_FILE}.${new}
-            if [ "$node" = "$HOSTNAME" ]; then
+            if [ "$node" = "$NODENAME" ]; then
                 mylocation=$output
             fi
         fi
@@ -1117,7 +1117,7 @@ have_master_right() {
             $CRM_MASTER -v $PROMOTE_ME
             return 0
         fi
-        change_data_status "$HOSTNAME" "DISCONNECT"
+        change_data_status "$NODENAME" "DISCONNECT"
         ocf_log info "I don't have correct master data."
         # reset counter
         rm -f ${XLOG_NOTE_FILE}.*
@@ -1178,12 +1178,12 @@ show_xlog_location() {
     local location
 
     location=`get_my_location` || return 1
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
+    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
     return $?
 }
 
 delete_xlog_location() {
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_XLOG_LOC_NAME" -D
+    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -D
     return $?
 }
 
@@ -1199,12 +1199,12 @@ show_master_baseline() {
     fi
     location=`get_my_location`
     ocf_log info "My master baseline : $location."
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -v "$location"
+    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -v "$location"
     return $?
 }
 
 delete_master_baseline() {
-    $CRM_ATTR_REBOOT -N "$HOSTNAME" -n "$PGSQL_MASTER_BASELINE" -D
+    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -D
     return $?
 }
 
@@ -1306,7 +1306,7 @@ make_recovery_conf() {
 
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
-primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${HOSTNAME} ${OCF_RESKEY_primary_conninfo_opt}'
+primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${NODENAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '${OCF_RESKEY_restore_command}'
 recovery_target_timeline = 'latest'
 END
@@ -1330,8 +1330,8 @@ change_pgsql_status() {
         # and misjudges the PostgreSQL as down while it is running.
         # It causes overwriting of pgsql-status by Master because replication is still connected.
         if [ "$output" = "STOP" -o "$output" = "UNKNOWN" ]; then
-            if [ "$1" != "$HOSTNAME" ]; then
-                ocf_log warn "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2 by $HOSTNAME is prohibited."
+            if [ "$1" != "$NODENAME" ]; then
+                ocf_log warn "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2 by $NODENAME is prohibited."
                 return 0
             fi
         fi
@@ -1657,7 +1657,7 @@ if is_replication; then
     PGSQL_XLOG_LOC_NAME="pgsql-xlog-loc"
     PGSQL_MASTER_BASELINE="pgsql-master-baseline"
 
-    HOSTNAME=`uname -n`
+    NODENAME=`uname -n`
     OPERATION=$1
 fi
 
