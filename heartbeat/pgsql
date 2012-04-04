@@ -1442,12 +1442,12 @@ exec_func_with_timeout() {
     $1 `eval echo $2` &
     func_pid=$!
     count=0
-    while kill -0 $func_pid >/dev/null 2>&1; do
+    while kill -s 0 $func_pid >/dev/null 2>&1; do
         sleep 1
         count=`expr $count + 1`
         if [ $count -ge $3 ]; then
             ocf_log debug "Execute $1 time out."
-            kill -9 $func_pid >/dev/null 2>&1
+            kill -s 9 $func_pid >/dev/null 2>&1
             return 0
         fi
     done
