@@ -905,6 +905,10 @@ pgsql_notify() {
     local op="${OCF_RESKEY_CRM_meta_notify_operation}"
     local rc
 
+    if ! is_replication; then
+        return $OCF_SUCCESS
+    fi
+
     ocf_log debug "notify: ${type} for ${op}"
     case $type in
         pre)
