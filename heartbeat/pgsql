@@ -793,6 +793,7 @@ pgsql_replication_monitor() {
     local my_status
     local data_status
     local is_master=""
+    rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
 
     rc=$1
     if [ $rc -ne $OCF_SUCCESS -a $rc -ne "$OCF_RUNNING_MASTER" ]; then
@@ -808,8 +809,7 @@ pgsql_replication_monitor() {
 
     # I can't get master node name from $OCF_RESKEY_CRM_meta_notify_master_uname on monitor,
     # so I will get master node name using crm_mon -n
-    if output=`crm_mon -n1 | grep " Master"`; then
-        rsc=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
+    if output=`crm_mon -n1 | grep -E "${rsc}.* Master"`; then
         instance=0
         while :
         do
