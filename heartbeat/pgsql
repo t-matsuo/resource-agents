@@ -470,8 +470,16 @@ pgsql_real_start() {
     # Tack pass-through options onto pg_ctl options
     pgctl_options="$pgctl_options -o '$postgres_options'"
 
+    # Unset PGPASSWORD, because it will cause postgresql to ignore .pgpass file for replication purposes... maybe this is not the best way, but I can't think of anything simpler for now.
+    unset PGPASSWORD
+
     # Invoke pg_ctl
     runasowner "$OCF_RESKEY_pgctl $pgctl_options start"
+
+    # Set it again here, as we are calling monitor.
+    if [ -n $OCF_RESKEY_monitor_password ]; then
+        PGPASSWORD=$OCF_RESKEY_monitor_password; export PGPASSWORD
+    fi
 
     if [ $? -eq 0 ]; then
         # Probably started.....
