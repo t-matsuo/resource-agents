@@ -49,6 +49,7 @@ OCF_RESKEY_monitor_password_default=""
 OCF_RESKEY_monitor_sql_default="select now();"
 # Defaults for replication
 OCF_RESKEY_rep_mode_default=none
+OCF_RESKEY_cacade_default=false
 OCF_RESKEY_node_list_default=""
 OCF_RESKEY_restore_command_default=""
 OCF_RESKEY_archive_cleanup_command_default=""
@@ -79,6 +80,7 @@ OCF_RESKEY_stop_escalate_in_slave_default=30
 
 # for replication
 : ${OCF_RESKEY_rep_mode=${OCF_RESKEY_rep_mode_default}}
+: ${OCF_RESKEY_cacade=${OCF_RESKEY_cascade_default}}
 : ${OCF_RESKEY_node_list=${OCF_RESKEY_node_list_default}}
 : ${OCF_RESKEY_restore_command=${OCF_RESKEY_restore_command_default}}
 : ${OCF_RESKEY_archive_cleanup_command=${OCF_RESKEY_archive_cleanup_command_default}}
@@ -262,6 +264,14 @@ for replication (in postgresql.conf and pg_hba.conf).
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
 <content type="string" default="${OCF_RESKEY_rep_mode_default}" />
+</parameter>
+
+<parameter name="cascade" unique="0" required="0">
+<longdesc lang="en">
+use cascade mode
+</longdesc>
+<shortdesc lang="en">cascade</shortdesc>
+<content type="boolean" default="${OCF_RESKEY_cascade_default}" />
 </parameter>
 
 <parameter name="node_list" unique="0" required="0">
@@ -1163,6 +1173,11 @@ is_replication() {
         return 0
     fi
     return 1
+}
+
+is_cascade() {
+    ocf_is_true $OCF_RESKEY_cascade
+    return $?
 }
 
 get_my_location() {
