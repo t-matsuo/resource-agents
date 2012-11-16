@@ -1023,7 +1023,10 @@ control_slave_status() {
 
     for target in $all_data_status; do
         slave_list_tmp=`echo $target | cut -d "|" -f 1`
-        slave_list="$slave_list_tmp $slave_list"
+        echo $NODE_LIST | grep -w -q "$slave_list_tmp"
+        if [ $? -eq 0 ]; then
+            slave_list="$slave_list_tmp $slave_list"
+        fi
     done
     slave_list=`echo $slave_list | tr -s " "`
     ocf_log debug "slave_list = '$slave_list'"
