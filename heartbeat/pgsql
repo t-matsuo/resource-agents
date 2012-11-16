@@ -268,7 +268,8 @@ for replication (in postgresql.conf and pg_hba.conf).
 
 <parameter name="cascade" unique="0" required="0">
 <longdesc lang="en">
-use cascade mode
+If you want to use cascade replication, set rep_mode to "async" or "sync".
+This parameter requires PostgreSQL 9.2 or later.
 </longdesc>
 <shortdesc lang="en">cascade</shortdesc>
 <content type="boolean" default="${OCF_RESKEY_cascade_default}" />
@@ -562,6 +563,9 @@ pgsql_replication_start() {
         return $OCF_ERR_GENERIC
     fi
     change_pgsql_status "$NODENAME" "HS:alone"
+    if is_cascade; then
+        change_pgsql_children $NODENAME "" || return $OCF_ERR_GENERIC
+    fi
     return $OCF_SUCCESS
 }
 
@@ -743,6 +747,9 @@ pgsql_replication_stop() {
     then
         ocf_log info "PostgreSQL is already stopped."
         change_pgsql_status "$NODENAME" "STOP"
+        if is_cascade; then
+            change_pgsql_children $NODENAME "" || return $OCF_ERR_GENERIC
+        fi
         return $OCF_SUCCESS
     fi
 
@@ -877,6 +884,10 @@ pgsql_replication_monitor() {
         if [ "$output" = "DISCONNECT" ]; then
             change_pgsql_status "$NODENAME" "HS:alone"
         fi
+        if is_cascade; then
+            control_slave_status "slave" || return $OCF_ERR_GENERIC
+            true
+        fi
     fi
     return $rc
 }
@@ -992,7 +1003,10 @@ control_slave_status() {
     local all_data_status
     local tmp_data_status
     local node_name
-    local number_of_nodes
+    local number_of_slaves
+    local target_list
+    local slave_list
+    local slave_list_tmp
 
     all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
                      $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
@@ -1007,9 +1021,32 @@ control_slave_status() {
         return 1
     fi
 
-    number_of_nodes=`echo $NODE_LIST | wc -w`
-    for target in $NODE_LIST; do
+    for target in $all_data_status; do
+        slave_list_tmp=`echo $target | cut -d "|" -f 1`
+        slave_list="$slave_list_tmp $slave_list"
+    done
+    slave_list=`echo $slave_list | tr -s " "`
+    ocf_log debug "slave_list = '$slave_list'"
+
+    if is_cascade; then
+        change_pgsql_children $NODENAME "$slave_list"
+        if [ ! -n "$slave_list" -a "$1" = "slave" ]; then
+            return 0
+        fi
+    fi
+
+    if [ "$1" = "slave" ]; then
+        target_list=$slave_list
+    else
+        target_list=$NODE_LIST
+    fi
+
+    number_of_slaves=`echo $slave_list | wc -w`
+    for target in $target_list; do
         if [ "$target" = "$NODENAME" ]; then
+            continue
+        fi
+        if is_cascade && [ "$1" != "slave" ] && search_pgsql_children $target; then
             continue
         fi
 
@@ -1035,20 +1072,25 @@ control_slave_status() {
                 ;;
             "STREAMING|ASYNC")
                 change_data_status "$target" "$data_status"
-                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+                if [ "$1" = "slave" ]; then
+                    change_master_score "$target" "$CAN_NOT_PROMOTE"
+                    change_pgsql_status "$target" "HS:cascade"
+                elif [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     change_master_score "$target" "$CAN_NOT_PROMOTE"
                     if ! is_sync_mode "$target"; then
                         set_sync_mode "$target"
                     fi
                 else
-                    if [ $number_of_nodes -le 2 ]; then
-                        change_master_score "$target" "$CAN_PROMOTE"
-                    else
-                        # I can't determine which slave's data is newest in async mode.
+                    if [ $number_of_slaves -ge 2 ]; then
+                        # I can't determine which slave's data is newest.
                         change_master_score "$target" "$CAN_NOT_PROMOTE"
+                    else
+                        change_master_score "$target" "$CAN_PROMOTE"
                     fi
                 fi
-                change_pgsql_status "$target" "HS:async"
+                if [ "$1" != "slave" ]; then
+                    change_pgsql_status "$target" "HS:async"
+                fi
                 ;;
             "STREAMING|POTENTIAL")
                 change_data_status "$target" "$data_status"
@@ -1283,6 +1325,7 @@ set_sync_mode() {
     local sync_node_in_conf
 
     sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
+
     if [ -n "$sync_node_in_conf" ]; then
         ocf_log info "Setup $1 into sync mode."
         echo "synchronous_standby_names = '$sync_node_in_conf,$1'" > "$REP_MODE_CONF"
@@ -1323,22 +1366,50 @@ user_recovery_conf() {
     fi
 }
 
+get_my_parent_ip() {
+    local node
+    local count
+
+    count=1
+    for node in $NODE_LIST; do
+        if [ "$node" = "$NODENAME" ]; then
+            echo $OCF_RESKEY_master_ip | cut -d " " -f $count
+            return 0
+        fi
+        count=`expr $count + 1`
+    done
+    return 1
+}
+
 make_recovery_conf() {
+    local my_master_ip
+
     runasowner "touch $RECOVERY_CONF"
     if [ $? -ne 0 ]; then
         ocf_log err "Can't create recovery.conf."
         return 1
     fi
 
+    if is_cascade; then
+        my_parent_ip=`get_my_parent_ip`
+        ocf_log info "My parent IP is $my_parent_ip"
+        if [ ! -n $my_parent_ip ]; then
+            ocf_log err "Can't get my parent IP."
+            return 1
+        fi
+    else
+        my_parent_ip=$OCF_RESKEY_master_ip
+    fi
+
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
-primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${NODENAME} ${OCF_RESKEY_primary_conninfo_opt}'
+primary_conninfo = 'host=${my_parent_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${NODENAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '${OCF_RESKEY_restore_command}'
 recovery_target_timeline = 'latest'
 END
 
     user_recovery_conf >> $RECOVERY_CONF
-    ocf_log debug "Created recovery.conf. host=${OCF_RESKEY_master_ip}, user=${OCF_RESKEY_repuser}"
+    ocf_log debug "Created recovery.conf. host=${my_parent_ip}, user=${OCF_RESKEY_repuser}"
     return 0
 }
 
@@ -1398,6 +1469,48 @@ change_data_status() {
         fi
     done
     return 0
+}
+
+# change pgsql-status.
+# arg1:node, arg2: value
+change_pgsql_children() {
+    local output
+
+    if ! is_node_online $1; then
+        return 0
+    fi
+
+    output=`$CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_CHILDREN" -G -q 2>/dev/null`
+    if [ "$output" != "$2" ]; then
+        ocf_log info "Changing $PGSQL_CHILDREN on $1 : $output->$2."
+        $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_CHILDREN" -v "$2"
+        if [ $? -ne 0 ]; then
+            ocf_log err "Can't change $PGSQL_STATUS_ATTR."
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# search_pgsql_children.
+# arg1: value
+search_pgsql_children() {
+    local node
+    local output
+
+    for node in $NODE_LIST; do
+        if [ "$node" = "$NODENAME" ]; then
+            continue
+        fi
+        output=`$CRM_ATTR_REBOOT -N "$node" -n "$PGSQL_CHILDREN" -G -q 2>/dev/null`
+        ocf_log debug "node = $node , output : $output"
+        echo $output | grep -w -q "$1"
+        if [ $? -eq 0 ]; then
+            ocf_log debug "Fuund !"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # set master-score
@@ -1530,6 +1643,8 @@ pgsql_validate_all() {
     local version
     local check_config_rc
     local rep_mode_string
+    local number_of_node
+    local number_of_ip
 
     if ! check_binary2 "$OCF_RESKEY_pgctl" || 
        ! check_binary2 "$OCF_RESKEY_psql"; then
@@ -1607,6 +1722,15 @@ pgsql_validate_all() {
         if ! mkdir -p $OCF_RESKEY_tmpdir || ! chown $OCF_RESKEY_pgdba $OCF_RESKEY_tmpdir || ! chmod 700 $OCF_RESKEY_tmpdir; then
             ocf_log err "Can't create directory $OCF_RESKEY_tmpdir or it is not readable by $OCF_RESKEY_pgdba"
             return $OCF_ERR_PERM
+        fi
+
+        if is_cascade; then
+            number_of_ip=`echo $OCF_RESKEY_master_ip | wc -w`
+            number_of_node=`echo $NODE_LIST | wc -w`
+            if [ $number_of_node -ne $number_of_ip ]; then
+                ocf_log_err "The number of node_list must be equal to the number of master_ip in cascade mode"
+                return $OCF_ERR_CONFIGURED
+            fi
         fi
     fi
 
@@ -1703,6 +1827,7 @@ if is_replication; then
     PGSQL_DATA_STATUS_ATTR="${RESOURCE_NAME}-data-status"
     PGSQL_XLOG_LOC_NAME="${RESOURCE_NAME}-xlog-loc"
     PGSQL_MASTER_BASELINE="${RESOURCE_NAME}-master-baseline"
+    PGSQL_CHILDREN="${RESOURCE_NAME}-children"
 
     NODENAME=`uname -n | tr '[A-Z]' '[a-z]'`
     NODE_LIST=`echo $OCF_RESKEY_node_list | tr '[A-Z]' '[a-z]'`
