@@ -1050,6 +1050,9 @@ control_slave_status() {
             continue
         fi
         if is_cascade && [ "$1" != "slave" ] && search_pgsql_children $target; then
+            if is_sync_mode "$target"; then
+                set_async_mode "$target"
+            fi
             continue
         fi
 
