@@ -1481,15 +1481,21 @@ change_data_status() {
 # arg1:node, arg2: value
 change_pgsql_children() {
     local output
+    local value
 
     if ! is_node_online $1; then
         return 0
     fi
 
+    if [ ! -n "$2" ]; then
+        value="none"
+    else
+        value="$2"
+    fi
     output=`$CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_CHILDREN" -G -q 2>/dev/null`
-    if [ "$output" != "$2" ]; then
-        ocf_log info "Changing $PGSQL_CHILDREN on $1 : $output->$2."
-        $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_CHILDREN" -v "$2"
+    if [ "$output" != "$value" ]; then
+        ocf_log info "Changing $PGSQL_CHILDREN on $1 : $output->$value."
+        $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_CHILDREN" -v "$value"
         if [ $? -ne 0 ]; then
             ocf_log err "Can't change $PGSQL_STATUS_ATTR."
             return 1
