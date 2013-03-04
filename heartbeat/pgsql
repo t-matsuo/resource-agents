@@ -391,6 +391,7 @@ If this is true, RA checks wal_receiver process on monitor
 and notify its status using "(resource name)-receiver-status" attribute.
 It's useful for checking whether PostgreSQL(Hot Standby) connects to primary.
 The attribute shows status as "normal" or "ERROR".
+The "normal" status is shown when wal_receiver process is running as streaming.
 </longdesc>
 <shortdesc lang="en">check_wal_receiver</shortdesc>
 <content type="boolean" default="${OCF_RESKEY_check_wal_receiver_default}" />
@@ -808,13 +809,13 @@ pgsql_wal_receiver_status() {
     local receiver_parent_pids
 
     PID=`head -n 1 $PIDFILE`
-    receiver_parent_pids=`ps -ef | tr -s " " | grep "[w]al receiver process" | cut -d " " -f 3`
+    receiver_parent_pids=`ps -ef | tr -s " " | grep "[w]al receiver process streaming " | cut -d " " -f 3`
     if echo "$receiver_parent_pids" | grep -q -w "$PID" ; then
         attrd_updater -n "$PGSQL_WAL_RECEIVER_STATUS_ATTR" -v "normal" -q
         return 0
     fi
     attrd_updater -n "$PGSQL_WAL_RECEIVER_STATUS_ATTR" -v "ERROR" -q
-    ocf_log warn "wal receiver process is not running"
+    ocf_log warn "wal receiver process is not running as streaming"
     return 1
 }
 
