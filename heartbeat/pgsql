@@ -475,8 +475,11 @@ pgsql_real_start() {
     local rc
 
     if pgsql_status; then
+        # PostgreSQLがすでに起動している場合の処理
         ocf_log info "PostgreSQL is already running. PID=`cat $PIDFILE`"
         if is_replication; then
+            # レプリケーション使用時は、RAからPostgreSQLが起動されていない場合、
+            # 属性値等が正常に初期化されていない可能性があるので、起動NGとする
             return $OCF_ERR_GENERIC
         else
             return $OCF_SUCCESS
@@ -487,6 +490,7 @@ pgsql_real_start() {
     rm -f $PIDFILE
 
     # Remove backup_label if it exists
+    # レプリケーション使用時、データの整合性を保つためにバックアップラベルは削除しない(だったかな?)
     if [ -f $BACKUPLABEL ] && ! is_replication; then
         ocf_log info "Removing $BACKUPLABEL. The previous backup might have failed."
         rm -f $BACKUPLABEL
@@ -527,6 +531,10 @@ pgsql_real_start() {
     pgctl_options="$pgctl_options -o '$postgres_options'"
 
     # Invoke pg_ctl
+    # 環境変数PGUSERやPGPASSWORは、monitor時に必要となるため共通処理としてすでに下の方で
+    # セットされているが、起動時にセットしてしまうと、レプリケーション接続時にもこれらの
+    # 環境変数が使用されてしまい、ユーザ指定のレプリケーション用ユーザ(repuser)や、
+    # repuserのパスワード設定(.pgpass ファイル)が無視されてしまうため、unsetしている
     runasowner "unset PGUSER; unset PGPASSWORD; $OCF_RESKEY_pgctl $pgctl_options start"
 
     if [ $? -eq 0 ]; then
@@ -537,6 +545,7 @@ pgsql_real_start() {
         return $OCF_ERR_GENERIC
     fi
 
+    # 起動するまで待つ
     while :
     do
         pgsql_real_monitor warn
@@ -556,14 +565,21 @@ pgsql_replication_start() {
     local rc
 
     # initializing for replication
+    # pgsql-statusをSTOPに初期化する。
     change_pgsql_status "$NODENAME" "STOP"
+    # pgsql-master-baseline 属性値を削除
     delete_master_baseline
+    # 自分のデータの状態は不明のためpromoteされないようにする
     $CRM_MASTER -v $CAN_NOT_PROMOTE
+    # 一時的なファイルが残っている可能性があるので削除
     rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
+    # Slaveで起動するためにrecovery.confを作成し、pgsql-xlog-replay-loc 属性を削除し、
+    # postgresql.confの設定を非同期にする
     if ! make_recovery_conf || ! delete_xlog_location || ! set_async_mode_all; then
         return $OCF_ERR_GENERIC
     fi
 
+    # ロックファイルがあると、自分のデータに不整合が発生している可能性があるため起動NGとする
     if [ -f $PGSQL_LOCK ]; then
         ocf_log err "My data may be inconsistent. You have to remove $PGSQL_LOCK file to force start."
         return $OCF_ERR_GENERIC
@@ -574,12 +590,16 @@ pgsql_replication_start() {
     if [ $? -ne $OCF_SUCCESS ]; then
         return $OCF_ERR_GENERIC
     fi
+
+    # 起動成功時は自分のpgsql-statusをHS:aloneに変更する
     change_pgsql_status "$NODENAME" "HS:alone"
     return $OCF_SUCCESS
 }
 
 #pgsql_start: pgsql_real_start() wrapper for replication
 pgsql_start() {
+    # rep_modeパラメータがsyncまたはasyncの場合は、Master/Slave制御用の関数
+    # pgsql_replication_start を呼び出す。
     if ! is_replication; then
         pgsql_real_start
         return $?
@@ -594,23 +614,31 @@ pgsql_promote() {
     local target
     local rc
 
+    # レプリケーション構成時以外では呼び出されるはずがないためエラーに。
     if ! is_replication; then
         ocf_log err "Not in a replication mode."
         return $OCF_ERR_CONFIGURED
     fi
     rm -f ${XLOG_NOTE_FILE}.*
 
+    # promote対象ノードがNODE_LISTに入っていない場合も想定外のためエラーに。
     for target in $NODE_LIST; do
         [ "$target" = "$NODENAME" ] && continue
         change_data_status "$target" "DISCONNECT"
         change_master_score "$target" "$CAN_NOT_PROMOTE"
     done
 
+    # ロックファイル作成
     ocf_log info "Creating $PGSQL_LOCK."
     touch $PGSQL_LOCK
+    # promote直前のデータの位置をpgsql-master-baselineとして見せる
     show_master_baseline
 
     if ocf_is_true ${OCF_RESKEY_restart_on_promote}; then
+        # restart_on_promote=trueの場合、promoteではなく再起動する
+        # ※ 主にTimelineIDの増加を防ぐのが目的だが、TimelineIDの本来の目的を
+        #    無視しているため、データの安全性は落ちそう・・・
+
         ocf_log info "Restarting PostgreSQL instead of promote."
         #stop : this function returns $OCF_SUCCESS only.
         pgsql_real_stop slave
@@ -625,6 +653,7 @@ pgsql_promote() {
             return $OCF_ERR_GENERIC
         fi
     else
+        # promote実行
         runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
         if [ $? -eq 0 ]; then
             ocf_log info "PostgreSQL promote command sent."
@@ -633,6 +662,7 @@ pgsql_promote() {
             return $OCF_ERR_GENERIC
         fi
 
+        # promoteが成功するまで待つ
         while :
         do
             pgsql_real_monitor warn
@@ -670,6 +700,10 @@ pgsql_demote() {
     if ! pgsql_status; then
         ocf_log info "PostgreSQL is already stopped on demote."
     else
+        # PostgreSQLはdemoteできないため、demote時にPostgreSQLは停止する。
+        # Master故障時は、demote直後にstopが呼ばれるが、demoteのみが実行された場合
+        # demote後にSlaveとして留まり、SlaveのmonitorでNGとなり、
+        # フェイルカウントが上がることで結局stopが呼ばれる。
         ocf_log info "Stopping PostgreSQL on demote."
         pgsql_real_stop master
         rc=$?
@@ -682,6 +716,9 @@ pgsql_demote() {
     return $OCF_SUCCESS
 }
 
+# PostgreSQLを停止する処理。
+# レプリケーション構成時は、demoteでもstopでもこの関数が呼ばれるが、
+# demote時は第一引数にmasterが、stop時はslaveが渡される。
 #pgsql_real_stop: Stop PostgreSQL
 pgsql_real_stop() {
     local rc
@@ -700,14 +737,18 @@ pgsql_real_stop() {
 
     stop_escalate=$OCF_RESKEY_stop_escalate
     if [ "$1" = "slave" ]; then
+        # レプリケーション構成時、slaveのstopの場合は、stop_escalate_in_slaveを使用する
         stop_escalate="$OCF_RESKEY_stop_escalate_in_slave"
     fi
 
     # Stop PostgreSQL, do not wait for clients to disconnect
     if [ $stop_escalate -gt 0 ]; then
+            # stop_escalate が 1以上の場合はfast shutdownを実行する。
+            # 0の場合は、下の処理にスキップするため、いきなりimmediate shutdownが実行される
             runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m fast"
     fi
 
+    # stop_escalate で指定した秒数、シャットダウンされるのを待つ
     # stop waiting
     count=0
     while [ $count -lt $stop_escalate ]
@@ -721,6 +762,7 @@ pgsql_real_stop() {
         sleep 1
     done
 
+    # PostgreSQLが停止していない場合、immediate shutdownに移行する
     if pgsql_status
     then
         #PostgreSQL is still up. Use another shutdown mode.
@@ -728,6 +770,8 @@ pgsql_real_stop() {
         runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata stop -m immediate"
     fi
 
+    # PostgreSQLが停止するまで永遠に待つ。
+    # ※ 停止しない場合でも、実際はPacemaker側のstop timeoutが発生するため、そこで処理は強制終了される
     while :
     do
         pgsql_real_monitor
@@ -743,6 +787,8 @@ pgsql_real_stop() {
     # Remove postmaster.pid if it exists
     rm -f $PIDFILE
 
+    # 自分がMasterで、かつ他にSlaveが存在しない場合、自分のデータが最新のはずなので、
+    # ロックファイルを削除する。(ここに入るのはdemote時の停止処理の場合のみ)
     if  [ "$1" = "master" -a "$OCF_RESKEY_CRM_meta_notify_slave_uname" = " " ]; then
         ocf_log info "Removing $PGSQL_LOCK."
         rm -f $PGSQL_LOCK
@@ -803,6 +849,7 @@ pgsql_status() {
      false
 }
 
+# wal reciver process の状態を属性値として表示するための関数 (あまり役立たたない)
 pgsql_wal_receiver_status() {
     local PID
     local receiver_parent_pids
@@ -837,10 +884,15 @@ pgsql_real_monitor() {
     fi
 
     if ocf_is_true ${OCF_RESKEY_check_wal_receiver}; then
+        # wal_receiverプロセスがいるかどうかを確認し、状態を属性値として
+        # 見せる。レプリケーション接続が切れていてもwal_receiverプロセスが
+        # 存在することがわかったため、この機能はあまり意味がないことが判明
         pgsql_wal_receiver_status
     fi
 
     if is_replication; then
+        # レプリケーション使用時のPostgreSQLの生死確認処理。
+        # select pg_is_in_recovery() を投げて、自分がMasterかSlaveかを確認する
         #Check replication state
         output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
                 $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
@@ -851,14 +903,20 @@ pgsql_real_monitor() {
             return $OCF_ERR_GENERIC
         fi
 
+        # pg_is_in_recovery()の結果がtならSlave, fならMasterと判断
         case "$output" in
             f)  ocf_log debug "PostgreSQL is running as a primary."
+
+                # ユーザ指定の監視用SQL(monitor_sql)がセットされていて、
+                # さらに自分がMasterの場合は、monitor_sqlを下で実行する
                 if [ "$OCF_RESKEY_monitor_sql" = "$OCF_RESKEY_monitor_sql_default" ]; then
                     return $OCF_RUNNING_MASTER
                 fi
                 ;;
 
             t)  ocf_log debug "PostgreSQL is running as a hot standby."
+                # Slaveの場合はmonitor_sqlは実行しない。つまりSlaveの生死確認は
+                # pg_is_in_recovery()だけ。
                 return $OCF_SUCCESS;;
 
             *)  ocf_log err "$CHECK_MS_SQL output is $output"
@@ -866,6 +924,8 @@ pgsql_real_monitor() {
         esac
     fi
 
+    # Act-Sby構成時はここで生死確認を実施。
+    # レプリケーション使用時で monitor_sql がセットされている場合もこれが実行される
     OCF_RESKEY_monitor_sql=`escape_string "$OCF_RESKEY_monitor_sql"`
     runasowner -q $loglevel "$OCF_RESKEY_psql $psql_options \
                   -c '$OCF_RESKEY_monitor_sql'"
@@ -876,25 +936,44 @@ pgsql_real_monitor() {
     fi
 
     if is_replication; then
+        # レプリケーション使用時にここに入れるのは、Masterの時だけのため、
+        # OCF_RUNNING_MASTERを返す
         return $OCF_RUNNING_MASTER
     fi
+
+    # Act-Sby構成時は通常の成功値を返す
     return $OCF_SUCCESS
 }
 
+# レプリケーション使用時、monitorでMaster/Slaveの制御を行う関数
 pgsql_replication_monitor() {
     local rc
 
     rc=$1
+    # pgsql_real_monitor の値が異常値の場合はそのまま異常として返す
     if [ $rc -ne $OCF_SUCCESS -a $rc -ne "$OCF_RUNNING_MASTER" ]; then
         return $rc
     fi
     # If I am Master
     if [ $rc -eq $OCF_RUNNING_MASTER ]; then
+        # 自分がMasterの場合、pgsql-statusやpgsql-data-statusを
+        # 適切に設定する。
+        # なお、monitorの度に設定値を上書きするのは無駄な動作なため、
+        # change_xxx_status 関数内では、現在の値が指定された値と異なる場合のみ
+        # 属性値をアップデートするような実装になっている
         change_data_status "$NODENAME" "LATEST"
         change_pgsql_status "$NODENAME" "PRI"
+
+        # 自分がMasterの場合、Slaveの状態を確認し制御するための関数を呼び出す。
+        # 具体的には、slaveが繋がっているか、繋がっているときは、asyncなのかsyncなのか、
+        # async の場合は sync に変更する必要があるのか、といった判断を行い、
+        # 実際にsync, async を切り替えたり、Slave の pgsql-statusやpgsql-data-statusを
+        # 変更している。
         control_slave_status || return $OCF_ERR_GENERIC
         return $rc
     fi
+
+    # ここからは自分がSlaveの場合の処理
 
     # I can't get master node name from $OCF_RESKEY_CRM_meta_notify_master_uname on monitor,
     # so I will get master node name using crm_mon -n
@@ -902,7 +981,11 @@ pgsql_replication_monitor() {
     if [ $? -ne 0 ] ; then
         # If I am Slave and Master is not exist
         ocf_log info "Master does not exist."
+
+        # Masterがいない場合、自分が繋がる先がないはずなので、自分のpgsql-statusをHS:aloneにする
         change_pgsql_status "$NODENAME" "HS:alone"
+
+        # 自分がMasterになれる権利を持っているかどうかを確認する関数
         have_master_right
         if [ $? -eq 0 ]; then
             rm -f ${XLOG_NOTE_FILE}.*
@@ -921,20 +1004,31 @@ pgsql_replication_monitor() {
 pgsql_monitor() {
     local rc
 
+    # PostgreSQLにSELECTを投げて状態を確認する。
+    # レプリケーション構成時、Slaveの場合はOCF_SUCCESSが、Masterの場合はOCF_RUNNING_MASTERが
+    # 返ってくる
     pgsql_real_monitor
     rc=$?
     if ! is_replication; then
         return $rc
     else
+        # レプリケーション使用時は、このmonitor処理の中で、続けてMaster/Slave用の制御を開始する
+        # rcを引数で渡すことで、関数内でMaster用、Slave用の制御が選択される
         pgsql_replication_monitor $rc
         return $?
     fi
 }
 
+# demote完了後に呼び出される関数
 # pgsql_post_demote
 pgsql_post_demote() {
+    # demoteされたノード名を取得
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     DEMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_demote_uname | sed "s/ /\n/g" | head -1 | tr '[A-Z]' '[a-z]'`
     ocf_log debug "post-demote called. Demote uname is $DEMOTE_NODE"
+
+    # demoteノードが自ノードじゃない場合、pgsql-master-baseline を表示する。
+    # 3ノード以上の場合に、pgsql_pre_promote() で使用される。
     if [ "$DEMOTE_NODE" != "$NODENAME" ]; then
         if ! echo $OCF_RESKEY_CRM_meta_notify_master_uname | tr '[A-Z]' '[a-z]' | grep $NODENAME; then
             show_master_baseline
@@ -944,6 +1038,7 @@ pgsql_post_demote() {
     return $OCF_SUCCESS
 }
 
+# promote実行前に呼びされる関数
 pgsql_pre_promote() {
     local master_baseline
     local my_master_baseline
@@ -951,20 +1046,36 @@ pgsql_pre_promote() {
     local number_of_nodes
 
     # If my data is newer than new master's one, I fail my resource.
+
+    # promoteされるノード名を取得
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | \
                   sed "s/ /\n/g" | head -1 | tr '[A-Z]' '[a-z]'`
     number_of_nodes=`echo $NODE_LIST | wc -w`
+
+    # レプリケーション構成に参加しているノード数が3ノード以上の場合で、かつrep_mode=syncの時のみ処理を実施
+    # ※ rep_mode=sync の場合、Master故障時はSTREAMING|SYNCのノードがpromoteされるが、PostgreSQLの仕様上、STREAMING|SYNC
+    #    以外のノードの方がデータが進んでいる可能性があり、この時新Masterとの間でデータの不整合が発生する可能性がある。
+    #    そのため、新Masterよりも自分のデータが進んでいる場合はリソースを強制的に故障させPostgreSQLを停止させる。
+    #    (戦略としてあまり綺麗じゃないので、もっとよいアイデアを募集)
     if [ $number_of_nodes -ge 3 -a \
          "$OCF_RESKEY_rep_mode" = "sync" -a \
          "$PROMOTE_NODE" != "$NODENAME" ]; then
+
+        # promote予定のノードのデータの位置(pgsql-master-baseline)の値を取得。
+        # ※ この値は、pgsql_post_demote 内での処理で全Slaveノードに表示されるため、それを取得している
         master_baseline=`$CRM_ATTR_REBOOT -N "$PROMOTE_NODE" -n \
                          "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
         if [ $? -eq 0 ]; then
             my_master_baseline=`$CRM_ATTR_REBOOT -N "$NODENAME" -n \
                                 "$PGSQL_MASTER_BASELINE" -G -q 2>/dev/null`
+
+            # データの新旧を比較
             # get older location
             cmp_location=`printf "$master_baseline\n$my_master_baseline\n" |\
                           sort | head -1`
+
+            # 自分のデータが新Masterより新しければリソースを故障させる
             if [ "$cmp_location" != "$my_master_baseline" ]; then
                 ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
                 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $NODENAME -v INFINITY
@@ -998,6 +1109,7 @@ pgsql_notify() {
             case $op in
                 promote)
                     delete_xlog_location
+                    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
                     PROMOTE_NODE=`echo $OCF_RESKEY_CRM_meta_notify_promote_uname | \
                                   sed "s/ /\n/g" | head -1 | tr '[A-Z]' '[a-z]'`
                     if [ "$PROMOTE_NODE" != "$NODENAME" ]; then
@@ -1010,8 +1122,12 @@ pgsql_notify() {
                     return $?
                     ;;
                 start|stop)
+                    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
                     MASTER_NODE=`echo $OCF_RESKEY_CRM_meta_notify_master_uname | \
                                   sed "s/ /\n/g" | head -1 | tr '[A-Z]' '[a-z]'`
+
+                    # どこかのノードがstartしたりstopした場合、Masterへのレプリケーション接続状態が変わる
+                    # 可能性が高いため、自分がMasterの場合はSlaveの状態を制御する関数をすぐに呼び出す
                     if [ "$NODENAME " = "$MASTER_NODE" ]; then
                         control_slave_status
                     fi
@@ -1023,6 +1139,7 @@ pgsql_notify() {
     return $OCF_SUCCESS
 }
 
+# 自分がMasterの時に、Slaveの状態を制御するための関数
 control_slave_status() {
     local rc
     local data_status
@@ -1032,12 +1149,20 @@ control_slave_status() {
     local node_name
     local number_of_nodes
 
+    # Slaveの状態を確認するために、pg_stat_replication ビューの結果を取得
+    # (取得結果例)
+    # srv02|STREAMING|SYNC
+    # srv03|STREAMING|ASYNC
     all_data_status=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
                      $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
                      -Atc \"${CHECK_REPLICATION_STATE_SQL}\""`
     rc=$?
     if [ $rc -eq 0 ]; then
         if [ -n "$all_data_status" ]; then
+            # 取得したデータは改行で区切られているが、処理しやすくするために、
+            # 改行をスペースに変換
+            # (変換後の例)
+            # srv02|STREAMING|SYNC srv03|STREAMING|ASYNC
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
         fi
     else
@@ -1045,20 +1170,38 @@ control_slave_status() {
         return 1
     fi
 
+    # レプリケーションに参加しているノード数を取得
     number_of_nodes=`echo $NODE_LIST | wc -w`
+
+    # レプリケーションに参加しているノード全てに対して処理を実行
     for target in $NODE_LIST; do
+
+        # 処理対象が自分の場合はスキップ
         if [ "$target" = "$NODENAME" ]; then
             continue
         fi
 
+        # 処理対象(Slave)のpgsql-data-statusの初期値は DISCONNECT に設定
         data_status="DISCONNECT"
+
         if [ -n "$all_data_status" ]; then
             for tmp_data_status in $all_data_status; do
+                # 文字列を切り取って変数へ代入
+                # (例) tmp_data_status が srv02|STREAMING|SYNC の場合
+                #      node_name=srv02
+                #      state=STREAMING
+                #      sync_state=SYNC
                 node_name=`echo $tmp_data_status | cut -d "|" -f 1`
                 state=`echo $tmp_data_status | cut -d "|" -f 2`
                 sync_state=`echo $tmp_data_status | cut -d "|" -f 3`
                 ocf_log debug "node=$node_name, state=$state, sync_state=$sync_state"
+
+                # node_nameが処理対象のノード名の場合、breakして
+                # 対象ノードの状態を処理する
+                # ※ ノード数が増えると効率悪くなる処理だなあ・・・
+                #    先に対象ノードかどうか比較した方がよいかも。
                 if [ "$node_name" = "$target" ];then
+                    # 対象ノードならば、pgsql-data-status 属性値の値を作成
                     data_status="$state|$sync_state"
                     break
                 fi
@@ -1067,18 +1210,28 @@ control_slave_status() {
 
         case "$data_status" in
             "STREAMING|SYNC")
+                # 同期レプリケーション接続時の処理
+
+                # change_xxx_status は、実際には値が異なる場合だけ設定を実行するように実装
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_PROMOTE"
                 change_pgsql_status "$target" "HS:sync"
                 ;;
             "STREAMING|ASYNC")
+                # 非同期レプリケーション時の処理
                 change_data_status "$target" "$data_status"
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     change_master_score "$target" "$CAN_NOT_PROMOTE"
+                    # rep_mode=syncの場合、対象のノードを同期レプリケーションに変更する
                     if ! is_sync_mode "$target"; then
                         set_sync_mode "$target"
                     fi
                 else
+                    # rep_mode=asyncで2ノード数が2つの場合は、対象ノードはフェイルオーバ可能とする
+                    # 3ノード以上の場合、フェイルオーバ先が複数あると、Master故障時にどちらのデータが
+                    # 新しいかこの時点では判断できないため、SlaveはMasterに昇格できないように設定する
+                    # -> Master故障時は、Master昇格権利があるかどうかの関数(have_master_right())に
+                    #    入り、残ったSlave間でデータの比較を実施してもらう。(F/Oには時間がかかる)
                     if [ $number_of_nodes -le 2 ]; then
                         change_master_score "$target" "$CAN_PROMOTE"
                     else
@@ -1089,11 +1242,16 @@ control_slave_status() {
                 change_pgsql_status "$target" "HS:async"
                 ;;
             "STREAMING|POTENTIAL")
+                # rep_mode=sync で、かつ3ノード以上の場合は、1ノードがsyncで残りがpotentialになる
+                # ただし、3ノード以上ではデータ欠損の可能性があり、このパッチを入れるとここには入らなくなる
+                # https://github.com/t-matsuo/resource-agents/commit/bd3b587c6665c4f5eba0491b91f83965e601bb6b
+                # ※ 1ノードしか同期レプリケーションの設定にしないパッチ
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
                 change_pgsql_status "$target" "HS:potential"
                 ;;
             "DISCONNECT")
+                # どれにも当てはまらない場合は、DISCONNECTとして処理
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ] && \
@@ -1108,6 +1266,8 @@ control_slave_status() {
                     is_sync_mode "$target"; then
                     set_async_mode "$target"
                 fi
+                # タイミングによっては、CATCHUP|ASYNC といった状態遷移中ステータスもあり、このような場合、
+                # HS:connected とする
                 change_pgsql_status "$target" "HS:connected"
                 ;;
         esac
@@ -1115,6 +1275,8 @@ control_slave_status() {
     return 0
 }
 
+# 自分がSlaveの場合、Masterになれる権利があるかどうかを確認するための関数
+# なお、Masterがすでに存在する場合は呼び出されない
 have_master_right() {
     local old
     local new
@@ -1132,12 +1294,18 @@ have_master_right() {
     data_status=`$CRM_ATTR_FOREVER -N "$NODENAME" -n \
                  "$PGSQL_DATA_STATUS_ATTR" -G -q`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
+        # rep_mode=syncで、自分のpgsql-data-statusがSTREAMING|SYNCでも
+        # LATESTでもない場合は、Masterになる権利はなしと判断
         if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a \
              "$data_status" != "LATEST" ]; then
             ocf_log warn "My data is out-of-date. status=$data_status"
             return 1
         fi
     else
+        # rep_mode=asyncで、自分のpgsql-data-statusがSTREAMING|SYNCでも
+        # STREAMING|ASYNCでもLATESTでもない場合は、Masterになる権利はなしと判断
+        # ※ 通常 async 設定の場合、STREAMING|SYNCにはならないが、
+        #    syncからasyncに設定を変更した場合はあり得るため、条件として入れている
         if [ -n "$data_status" -a "$data_status" != "STREAMING|SYNC" -a \
              "$data_status" != "STREAMING|ASYNC" -a \
              "$data_status" != "LATEST" ]; then
@@ -1147,6 +1315,8 @@ have_master_right() {
     fi
     ocf_log info "My data status=$data_status."
 
+    # 自分のデータの新旧を他のノードと比較するために、
+    # 自分のデータの位置をpgsql-xlog-replay-loc属性値として公開
     show_xlog_location
     if [ $? -ne 0 ]; then
         ocf_log err "Failed to show my xlog location."
@@ -1154,7 +1324,13 @@ have_master_right() {
     fi
 
     old=0
+    # xlog_check_count で指定された回数だけ、他のノードと
+    # データの新旧を比較するという仕様。そのために、今回の比較回数が
+    # 何回目かを確認。
     for count in `seq $OCF_RESKEY_xlog_check_count`; do
+       # 下の方で、データの新旧比較結果を${XLOG_NOTE_FILE}.$countという
+       # ファイルに書きこんでいるため、このファイルがどこまで存在するかを
+       # 確認して今回の確認回数を判断する。
        if [ -f ${XLOG_NOTE_FILE}.$count ]; then
            old=$count
            continue
@@ -1163,6 +1339,10 @@ have_master_right() {
     done
     new=`expr $old + 1`
 
+    # 全ノードのpgsql-xlog-replay-loc(データの位置)を全て取得し、
+    # ファイル(${XLOG_NOTE_FILE}.${new})に保存する。
+    # もちろん、単ノード起動時は他のノードのデータの位置は取得できないため、
+    # 結果的にファイルに書き込まれるのは自分のデータの位置だけとなる
     # get xlog locations of all nodes
     for node in ${NODE_LIST}; do
         output=`$CRM_ATTR_REBOOT -N "$node" -n \
@@ -1179,8 +1359,14 @@ have_master_right() {
         fi
     done
 
+    # 前回の比較結果を取得
     oldfile=`cat ${XLOG_NOTE_FILE}.${old} 2>/dev/null`
+    # 今回の比較結果を取得
     newfile=`cat ${XLOG_NOTE_FILE}.${new} 2>/dev/null`
+
+    # 前回と今回の比較結果に違いがある場合、どこかのノード上の
+    # PostgreSQLがリカバリ中の可能性があるため、比較回数のカウンタを
+    # 一旦リセットする。
     if [ "$oldfile" != "$newfile" ]; then
         # reset counter
         rm -f ${XLOG_NOTE_FILE}.*
@@ -1188,16 +1374,28 @@ have_master_right() {
         return 1
     fi
 
+    # 比較回数がxlog_check_countに達した場合、データの比較を実施し
+    # 自分のデータが最も新しい場合は return 0 を返す
     if [ "$new" -ge "$OCF_RESKEY_xlog_check_count" ]; then
+        # 比較には、ファイルの内容をsortすることで実現
         newestXlog=`printf "$newfile\n" | sort -t " " -k 2,3 -r | \
                     head -1 | cut -d " " -f 2`
         if [ "$newestXlog" = "$mylocation" ]; then
             ocf_log info "I have a master right."
+            # 自分が最新のデータを持っている場合、masterスコアを
+            # 上げて、promote されるのを待つ
             $CRM_MASTER -v $PROMOTE_ME
             return 0
         fi
+
+        # 自分のデータが最新ではない場合、pgsql-data-status を
+        # DISCONNECT にセットし、Masterになれないようにする。
         change_data_status "$NODENAME" "DISCONNECT"
         ocf_log info "I don't have correct master data."
+
+        # promote されるを待っていても、実際にはpromoteが呼ばれないことがあり
+        # その時はここに入ってきて、カウンタがリセットされる。
+        # その結果、また比較がやり直される。
         # reset counter
         rm -f ${XLOG_NOTE_FILE}.*
         printf "$newfile\n" > ${XLOG_NOTE_FILE}.0
@@ -1224,6 +1422,8 @@ get_my_location() {
     local log2
     local newer_location
 
+
+    # pg_last_xlog_replay_location() と pg_last_xlog_receive_location() を取得
     output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
             $OCF_RESKEY_psql $psql_options -U $OCF_RESKEY_pgdba \
             -Atc \"${CHECK_XLOG_LOC_SQL}\""`
@@ -1248,6 +1448,8 @@ get_my_location() {
     log2=`printf "%08s\n" $output2 | sed "s/ /0/g"`
     receive_loc="${log1}${log2}"
 
+    # pg_last_xlog_replay_location() と pg_last_xlog_receive_location() のうち、
+    # 新しい方を自分のデータの位置として使用する。
     newer_location=`printf "$replay_loc\n$receive_loc" | sort -r | head -1`
     echo "$newer_location"
     return 0
@@ -1283,6 +1485,7 @@ delete_master_baseline() {
     $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -D
 }
 
+# 全てのノードの設定を非同期にする関数
 set_async_mode_all() {
     [ "$OCF_RESKEY_rep_mode" = "sync" ] || return 0
     ocf_log info "Set all nodes into async mode."
@@ -1294,6 +1497,7 @@ set_async_mode_all() {
     return 0
 }
 
+# 指定されたノードを非同期設定にする関数
 set_async_mode() {
     local sync_node_in_conf
 
@@ -1312,6 +1516,8 @@ set_async_mode() {
     reload_conf
 }
 
+# 指定されたノードを同期設定にする関数
+# postgresql.conf の synchronous_standby_names を書き換えて、reload している。
 set_sync_mode() {
     local sync_node_in_conf
 
@@ -1329,6 +1535,7 @@ set_sync_mode() {
     reload_conf
 }
 
+# 指定されたノードが同期設定になっているかを確認するための関数
 is_sync_mode() {
     cat $REP_MODE_CONF |  grep -q -e "[,' ]$1[,' ]"
 }
@@ -1356,6 +1563,9 @@ user_recovery_conf() {
     fi
 }
 
+# start時にSlaveで起動するために、recovery.conf を作成する関数
+# application_nameに自分のノード名を入れることで、Master側のpg_stat_replicationビューに
+# Slaveの状態を表示させている
 make_recovery_conf() {
     runasowner "touch $RECOVERY_CONF"
     if [ $? -ne 0 ]; then
@@ -1526,11 +1736,16 @@ exec_func_with_timeout() {
     wait $func_pid
 }
 
+# 指定したノードがonlineかどうかを判断するための関数
 is_node_online() {
+    # PM1.0とPM1.1でcrm_monの出力が微妙に異なるため、"^node $1 " と "^node $1:" で grepしている
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     crm_mon -1 -n | tr '[A-Z]' '[a-z]' | grep -e "^node $1 " -e "^node $1:" | grep -q -v "offline"
 }
 
+# 指定したノードが存在するかどうかを判断するための関数 (onlineかどうかは問わない)
 node_exist() {
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     crm_mon -1 -n | tr '[A-Z]' '[a-z]' | grep -q "^node $1"
 }
 
@@ -1602,6 +1817,7 @@ pgsql_validate_all() {
     fi
 
     if is_replication || [ "$OCF_RESKEY_rep_mode" = "slave" ]; then
+        # レプリケーション使用時は、PG9.1以上が必要なため、使用しているPGのバージョンをチェック
         version=`cat $OCF_RESKEY_pgdata/PG_VERSION`
         if [ `printf "$version\n9.1" | sort -n | head -1` != "9.1" ]; then
             ocf_log err "Replication mode needs PostgreSQL 9.1 or higher."
@@ -1630,22 +1846,30 @@ pgsql_validate_all() {
             rep_mode_string="include '$REP_MODE_CONF' # added by pgsql RA"
             if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                 if ! grep -q "$rep_mode_string" $OCF_RESKEY_config; then
+                    # postgresql.confに、include文が追加されていいない場合は追加。
+                    # RAは、インクルード先の #OCF_RESKEY_configに
+                    # synchronous_standby_names パラメータだけを記述し、RAは、同期・非同期切り替えに
+                    # このファイルを変更する (set_sync_mode や set_async_mode 関数内)
                     ocf_log info "adding include directive into $OCF_RESKEY_config"
                     echo "$rep_mode_string" >> $OCF_RESKEY_config
                 fi
             else
+                # rep_mode=sync 以外の場合、RAで追加したinclude文があれば削除する (コミュニティ要望)
                 if grep -q "$rep_mode_string" $OCF_RESKEY_config; then
                     ocf_log info "deleting include directive from $OCF_RESKEY_config"
                     sed -i "/${rep_mode_string//\//\\/}/d" $OCF_RESKEY_config
                 fi
             fi
         fi
+        # RAが使用するテンポラリディレクトリを作成
         if ! mkdir -p $OCF_RESKEY_tmpdir || ! chown $OCF_RESKEY_pgdba $OCF_RESKEY_tmpdir || ! chmod 700 $OCF_RESKEY_tmpdir; then
             ocf_log err "Can't create directory $OCF_RESKEY_tmpdir or it is not readable by $OCF_RESKEY_pgdba"
             return $OCF_ERR_PERM
         fi
     fi
 
+    # rep_mode=slave は、Master/Slave 構成ではなく、Act-SbyのPostgreSQLをSlave(HS)で起動するためだけの動作をするため、
+    # 間違ってMaster/Slave 設定されている場合はエラーとする。
     if [ "$OCF_RESKEY_rep_mode" = "slave" ]; then
         if ocf_is_ms; then
             ocf_log err "Replication(rep_mode=slave) does not support Master/Slave configuration."
@@ -1724,8 +1948,11 @@ BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 RESOURCE_NAME=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
 PGSQL_WAL_RECEIVER_STATUS_ATTR="${RESOURCE_NAME}-receiver-status"
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
+
+# Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
 NODENAME=`uname -n | tr '[A-Z]' '[a-z]'`
 
+# レプリケーション構成時のみ必要な変数をセット
 if is_replication; then
     REP_MODE_CONF=${OCF_RESKEY_tmpdir}/rep_mode.conf
     PGSQL_LOCK=${OCF_RESKEY_tmpdir}/PGSQL.lock
@@ -1740,15 +1967,22 @@ if is_replication; then
     CAN_PROMOTE="100"
     PROMOTE_ME="1000"
 
+    # Master/Slave どちらで動いているかを判断するためのSQL
     CHECK_MS_SQL="select pg_is_in_recovery()"
+    # PostgreSQLのデータの位置を取得するためのSQL
     CHECK_XLOG_LOC_SQL="select pg_last_xlog_replay_location(),pg_last_xlog_receive_location()"
+    # Master時に、Slaveの接続状態を取得するためのSQL
     CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
 
+    # 各種属性名。複数インスタンスでも動くように、属性名にはリソースIDを入れる
+    # 本ファイルのコメント内では、RESOURCE_NAME=pgsql と仮定して書いているため、
+    # pgsql-status, pgsql-data-status, pgsql-xlog-loc, pgsql-master-baseline となっている
     PGSQL_STATUS_ATTR="${RESOURCE_NAME}-status"
     PGSQL_DATA_STATUS_ATTR="${RESOURCE_NAME}-data-status"
     PGSQL_XLOG_LOC_NAME="${RESOURCE_NAME}-xlog-loc"
     PGSQL_MASTER_BASELINE="${RESOURCE_NAME}-master-baseline"
 
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     NODE_LIST=`echo $OCF_RESKEY_node_list | tr '[A-Z]' '[a-z]'`
 fi
 
