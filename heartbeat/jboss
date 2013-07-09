@@ -166,10 +166,8 @@ start_jboss()
 	return $OCF_SUCCESS
 }
 
-stop_jboss()
+stop_jboss5()
 {
-	ocf_log info "Stopping JBoss[$RESOURCE_NAME]"
-
 	if [ "$JBOSS_USER" = root ]; then
 		"$JBOSS_HOME/bin/shutdown.sh" $SHUTDOWN_OPTS -S \
 			>> "$CONSOLE" 2>&1 &
@@ -210,6 +208,40 @@ stop_jboss()
 			fi
 		done
 	fi
+}
+
+stop_jboss6()
+{
+	pkill -TERM -f "$PSTRING"
+
+	lapse_sec=0
+	while pgrep -f "$PSTRING" > /dev/null; do
+		sleep 1
+		lapse_sec=`expr $lapse_sec + 1`
+		ocf_log info "stop_jboss[$RESOURCE_NAME]: stop NORM $lapse_sec/$SHUTDOWN_TIMEOUT"
+		if [ $lapse_sec -ge $SHUTDOWN_TIMEOUT ]; then
+			break
+		fi
+	done
+
+	if pgrep -f "$PSTRING" > /dev/null; then 
+		ocf_log info "stop_jboss[$RESOURCE_NAME]: output a JVM thread dump to $CONSOLE"
+		pkill -QUIT -f "$PSTRING"
+	fi
+}
+
+stop_jboss()
+{
+	ocf_log info "Stopping JBoss[$RESOURCE_NAME]"
+
+	# JBoss5 : shutdonw.sh -> SIGQUIT -> SIGTERM
+	# JBoss6 : SIGTERM -> SIGQUIT
+	if [ "$JBOSS_VERSION" -le 5 ]; then
+		stop_jboss5
+	else
+		stop_jboss6
+	fi
+
 	# If the JBoss process hangs, JBoss RA waits $SHUTDOWN_TIMEOUT
 	# seconds and tries kill TERM and QUIT for $KILL_TIMEOUT seconds.
 	# The stop timeout of RA should be
