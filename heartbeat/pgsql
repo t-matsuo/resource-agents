@@ -240,7 +240,7 @@ Path to PostgreSQL server log output file.
 
 <parameter name="socketdir" unique="0" required="0">
 <longdesc lang="en">
-Unix socket directory for PostgeSQL
+Unix socket directory for PostgreSQL
 </longdesc>
 <shortdesc lang="en">socketdir</shortdesc>
 <content type="string" default="" />
@@ -259,12 +259,12 @@ Number of shutdown retries (using -m fast) before resorting to -m immediate
 Replication mode may be set to "async" or "sync" or "slave".
 They require PostgreSQL 9.1 or later.
 Once set, "async" and "sync" require node_list, master_ip, and
-restore_command parameters,as well as configuring postgresql
+restore_command parameters,as well as configuring PostgreSQL
 for replication (in postgresql.conf and pg_hba.conf).
 
 "slave" means that RA only makes recovery.conf before starting
-to connect to Primary which is running somewhere.
-It dosen't need Master/Slave setting.
+to connect to primary which is running somewhere.
+It dosen't need master/slave setting.
 It requires master_ip restore_command parameters.
 </longdesc>
 <shortdesc lang="en">rep_mode</shortdesc>
@@ -358,7 +358,7 @@ This is optional for replication.
 
 <parameter name="xlog_check_count" unique="0" required="0">
 <longdesc lang="en">
-Number of checking xlog on monitor before promote.
+Number of checks of xlog on monitor before promote.
 This is optional for replication.
 </longdesc>
 <shortdesc lang="en">xlog check count</shortdesc>
@@ -378,7 +378,7 @@ This is optional for replication.
 <parameter name="stop_escalate_in_slave" unique="0" required="0">
 <longdesc lang="en">
 Number of shutdown retries (using -m fast) before resorting to -m immediate
-in Slave state.
+in slave state.
 This is optional for replication.
 </longdesc>
 <shortdesc lang="en">stop escalation_in_slave</shortdesc>
@@ -388,8 +388,8 @@ This is optional for replication.
 <parameter name="check_wal_receiver" unique="0" required="0">
 <longdesc lang="en">
 If this is true, RA checks wal_receiver process on monitor
-and notify its status using "(resource name)-receiver-status" attribute.
-It's useful for checking whether PostgreSQL(Hot Standby) connects to primary.
+and notifies its status using "(resource name)-receiver-status" attribute.
+It's useful for checking whether PostgreSQL (hot standby) connects to primary.
 The attribute shows status as "normal" or "ERROR".
 </longdesc>
 <shortdesc lang="en">check_wal_receiver</shortdesc>
@@ -574,8 +574,8 @@ pgsql_replication_start() {
     # pgsql-master-baseline 属性値を削除
     delete_master_baseline
 
-    # 自分のデータの状態は不明のためpromoteされないようにする
-    $CRM_MASTER -v $CAN_NOT_PROMOTE
+    # 自分のデータの状態は不明のためpromoteされないようにする。crm_master コマンド失敗時はリトライ。
+    exec_with_retry 0 $CRM_MASTER -v $CAN_NOT_PROMOTE
 
     # 一時的なファイルが残っている可能性があるので削除
     rm -f ${XLOG_NOTE_FILE}.* $REP_MODE_CONF $RECOVERY_CONF
@@ -695,7 +695,7 @@ pgsql_promote() {
     # promote成功時は、pgsql-data-status=LATEST, pgsql-status=PRIに変更し、
     # マスタスコアも1000に上げる。
     change_data_status "$NODENAME" "LATEST"
-    $CRM_MASTER -v $PROMOTE_ME
+    exec_with_retry 0 $CRM_MASTER -v $PROMOTE_ME
     change_pgsql_status "$NODENAME" "PRI"
     return $OCF_SUCCESS
 }
@@ -710,7 +710,7 @@ pgsql_demote() {
     fi
 
     # 念のためマスタスコアは-INFINITYへ変更する。
-    $CRM_MASTER -v $CAN_NOT_PROMOTE
+    exec_with_retry 0 $CRM_MASTER -v $CAN_NOT_PROMOTE
     delete_master_baseline
 
     if ! pgsql_status; then
@@ -820,6 +820,7 @@ pgsql_replication_stop() {
     local rc
 
     # 念のためマスタスコアを-INFINITYへ変更
+    exec_with_retry 5 $CRM_MASTER -v $CAN_NOT_PROMOTE
     $CRM_MASTER -v $CAN_NOT_PROMOTE
 
     # pgsql-xlog-loc 属性が残っている場合があるので削除
@@ -933,7 +934,7 @@ pgsql_real_monitor() {
                 -Atc \"${CHECK_MS_SQL}\""`
         rc=$?
         if [ $rc -ne  0 ]; then
-            report_psql_error $rc $loglevel
+            report_psql_error $rc $loglevel "Can't get PostgreSQL recovery status."
             return $OCF_ERR_GENERIC
         fi
 
@@ -965,7 +966,7 @@ pgsql_real_monitor() {
                   -c '$OCF_RESKEY_monitor_sql'"
     rc=$?
     if [ $rc -ne  0 ]; then
-        report_psql_error $rc $loglevel
+        report_psql_error $rc $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running."
         return $OCF_ERR_GENERIC
     fi
 
@@ -1004,6 +1005,12 @@ pgsql_replication_monitor() {
         # 実際にsync, async を切り替えたり、Slave の pgsql-statusやpgsql-data-statusを
         # 変更している。
         control_slave_status || return $OCF_ERR_GENERIC
+        if [ "$RE_CONTROL_SLAVE" = "true" ]; then
+            sleep 2
+            ocf_log info "re-controlling slave status."
+            RE_CONTROL_SLAVE="none"
+            control_slave_status || return $OCF_ERR_GENERIC
+        fi
         return $rc
     fi
 
@@ -1011,7 +1018,7 @@ pgsql_replication_monitor() {
 
     # I can't get master node name from $OCF_RESKEY_CRM_meta_notify_master_uname on monitor,
     # so I will get master node name using crm_mon -n
-    crm_mon -n1 | tr -d "\t" | tr -d " " | grep -q "^${RESOURCE_NAME}:.*[):]Master"
+    print_crm_mon | tr -d "\t" | tr -d " " | grep -q "^${RESOURCE_NAME}[(:].*[):]Master"
     if [ $? -ne 0 ] ; then
         # If I am Slave and Master is not exist
         ocf_log info "Master does not exist."
@@ -1025,7 +1032,7 @@ pgsql_replication_monitor() {
             rm -f ${XLOG_NOTE_FILE}.*
         fi
     else
-        output=`$CRM_ATTR_FOREVER -N "$NODENAME" \
+        output=`exec_with_retry 0 $CRM_ATTR_FOREVER -N "$NODENAME" \
                 -n "$PGSQL_DATA_STATUS_ATTR" -G -q`
         if [ "$output" = "DISCONNECT" ]; then
             change_pgsql_status "$NODENAME" "HS:alone"
@@ -1112,7 +1119,7 @@ pgsql_pre_promote() {
             # 自分のデータが新Masterより新しければリソースを故障させる
             if [ "$cmp_location" != "$my_master_baseline" ]; then
                 ocf_log err "My data is newer than new master's one. New master's location : $master_baseline"
-                $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $NODENAME -v INFINITY
+                exec_with_retry 0 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $NODENAME -v INFINITY
                 return $OCF_ERR_GENERIC
             fi
         fi
@@ -1162,7 +1169,7 @@ pgsql_notify() {
 
                     # どこかのノードがstartしたりstopした場合、Masterへのレプリケーション接続状態が変わる
                     # 可能性が高いため、自分がMasterの場合はSlaveの状態を制御する関数をすぐに呼び出す
-                    if [ "$NODENAME " = "$MASTER_NODE" ]; then
+                    if [ "$NODENAME" = "$MASTER_NODE" ]; then
                         control_slave_status
                     fi
                     return $OCF_SUCCESS
@@ -1180,7 +1187,6 @@ control_slave_status() {
     local target
     local all_data_status
     local tmp_data_status
-    local node_name
     local number_of_nodes
 
     # Slaveの状態を確認するために、pg_stat_replication ビューの結果を取得
@@ -1200,7 +1206,7 @@ control_slave_status() {
             all_data_status=`echo $all_data_status | sed "s/\n/ /g"`
         fi
     else
-        report_psql_error $rc warn
+        report_psql_error $rc err "Can't get PostgreSQL replication status."
         return 1
     fi
 
@@ -1226,25 +1232,14 @@ control_slave_status() {
 
         if [ -n "$all_data_status" ]; then
             for tmp_data_status in $all_data_status; do
-                # 文字列を切り取って変数へ代入
-                # (例) tmp_data_status が srv02|STREAMING|SYNC の場合
-                #      node_name=srv02
-                #      state=STREAMING
-                #      sync_state=SYNC
-                node_name=`echo $tmp_data_status | cut -d "|" -f 1`
-                state=`echo $tmp_data_status | cut -d "|" -f 2`
-                sync_state=`echo $tmp_data_status | cut -d "|" -f 3`
-                ocf_log debug "node=$node_name, state=$state, sync_state=$sync_state"
-
-                # node_nameが処理対象のノード名の場合、breakして
-                # 対象ノードの状態を処理する
-                # ※ ノード数が増えると効率悪くなる処理だなあ・・・
-                #    先に対象ノードかどうか比較した方がよいかも。
-                if [ "$node_name" = "$target" ];then
-                    # 対象ノードならば、pgsql-data-status 属性値の値を作成
-                    data_status="$state|$sync_state"
-                    break
+                # 処理対象のノードのデータかどうか判定
+                if ! echo $tmp_data_status | grep -q "^${target}|"; then
+                    # 処理対象じゃなければ次のデータを取得
+                    continue
                 fi
+                data_status=`echo $tmp_data_status | cut -d "|" -f 2,3`
+                ocf_log debug "node_name and data_status is $tmp_data_status"
+                break
             done
         fi
 
@@ -1263,9 +1258,7 @@ control_slave_status() {
                 if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     change_master_score "$target" "$CAN_NOT_PROMOTE"
                     # rep_mode=syncの場合、対象のノードを同期レプリケーションに変更する
-                    if ! is_sync_mode "$target"; then
-                        set_sync_mode "$target"
-                    fi
+                    set_sync_mode "$target"
                 else
                     # rep_mode=asyncで2ノード数が2つの場合は、対象ノードはフェイルオーバ可能とする
                     # 3ノード以上の場合、フェイルオーバ先が複数あると、Master故障時にどちらのデータが
@@ -1294,16 +1287,14 @@ control_slave_status() {
                 # どれにも当てはまらない場合は、DISCONNECTとして処理
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
-                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && \
-                   is_sync_mode "$target"; then
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     set_async_mode "$target"
                 fi
                 ;;
             *)
                 change_data_status "$target" "$data_status"
                 change_master_score "$target" "$CAN_NOT_PROMOTE"
-                if [ "$OCF_RESKEY_rep_mode" = "sync" ] && \
-                    is_sync_mode "$target"; then
+                if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
                     set_async_mode "$target"
                 fi
                 # タイミングによっては、CATCHUP|ASYNC といった状態遷移中ステータスもあり、このような場合、
@@ -1332,7 +1323,7 @@ have_master_right() {
     ocf_log debug "Checking if I have a master right."
 
     data_status=`$CRM_ATTR_FOREVER -N "$NODENAME" -n \
-                 "$PGSQL_DATA_STATUS_ATTR" -G -q`
+                 "$PGSQL_DATA_STATUS_ATTR" -G -q 2>/dev/null`
     if [ "$OCF_RESKEY_rep_mode" = "sync" ]; then
         # rep_mode=syncで、自分のpgsql-data-statusがSTREAMING|SYNCでも
         # LATESTでもない場合は、Masterになる権利はなしと判断
@@ -1427,7 +1418,7 @@ have_master_right() {
             ocf_log info "I have a master right."
             # 自分が最新のデータを持っている場合、masterスコアを
             # 上げて、promote されるのを待つ
-            $CRM_MASTER -v $PROMOTE_ME
+            exec_with_retry 5 $CRM_MASTER -v $PROMOTE_ME
             return 0
         fi
 
@@ -1472,8 +1463,7 @@ get_my_location() {
             -Atc \"${CHECK_XLOG_LOC_SQL}\""`
     rc=$?
     if [ $rc -ne 0 ]; then
-        report_psql_error $rc warn
-        ocf_log err "Can't get my xlog location."
+        report_psql_error $rc err "Can't get my xlog location."
         return 1
     fi
     replay_loc=`echo $output | cut -d "|" -f 1`
@@ -1502,30 +1492,24 @@ show_xlog_location() {
     local location
 
     location=`get_my_location` || return 1
-    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
+    exec_with_retry 0 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
 }
 
 delete_xlog_location() {
-    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -D
+    exec_with_retry 5 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -D
 }
 
 show_master_baseline() {
     local rc
     local location
 
-    runasowner -q err "$OCF_RESKEY_psql $psql_options \
-                       -U $OCF_RESKEY_pgdba -c 'CHECKPOINT'"
-    rc=$?
-    if [ $rc -ne 0 ]; then
-        report_psql_error $rc warn
-    fi
     location=`get_my_location`
     ocf_log info "My master baseline : $location."
-    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -v "$location"
+    exec_with_retry 0 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -v "$location"
 }
 
 delete_master_baseline() {
-    $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -D
+    exec_with_retry 5 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_MASTER_BASELINE" -D
 }
 
 # 全てのノードの設定を非同期にする関数。synchronous_standby_names の設定を空にするだけ。
@@ -1543,24 +1527,16 @@ set_async_mode_all() {
 # 指定されたノードを非同期設定にする関数
 # postgresql.conf の synchronous_standby_names を書き換えて、reload している。
 set_async_mode() {
-    local sync_node_in_conf
-
-    # 現在同期設定になっているノード名を取得
-    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
-
-    if [ -n "$sync_node_in_conf" ]; then
-        # 同期設定のノードがある場合、指定されたノードを非同期にする(ノード名を取り除く)
+    # REP_MODE_CONFに非同期設定対象のノード名があるかどうか判断
+    cat $REP_MODE_CONF |  grep -q -e "[,' ]$1[,' ]"
+    if [ $? -eq 0 ]; then
         ocf_log info "Setup $1 into async mode."
-        sync_node_in_conf=`echo $sync_node_in_conf | sed "s/$1//g" |\
-                           sed "s/^,//g" | sed "s/,,/,/g" | sed "s/,$//g"`
-        echo "synchronous_standby_names = '$sync_node_in_conf'" > "$REP_MODE_CONF"
+        echo "synchronous_standby_names = ''" > "$REP_MODE_CONF"
     else
-        ocf_log info "$1 is already in async mode."
+        ocf_log debug "$1 is already in async mode."
         return 0
     fi
-
-    ocf_log info "All synced nodes : \"$sync_node_in_conf\""
-    reload_conf
+    exec_with_retry 0 reload_conf
 }
 
 # 指定されたノードを同期設定にする関数
@@ -1568,23 +1544,22 @@ set_async_mode() {
 set_sync_mode() {
     local sync_node_in_conf
 
+    # 現在同期で動いているノード名を取得
     sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
     if [ -n "$sync_node_in_conf" ]; then
-        ocf_log info "Setup $1 into sync mode."
-        echo "synchronous_standby_names = '$sync_node_in_conf,$1'" > "$REP_MODE_CONF"
+        # すでに同期で動いているノードがいる場合は、他のノードは同期設定に
+        # 変更しない
+        # ※ 3ノード以上存在していて、2ノードが同期設定になると、
+        #    データ欠損が発生する可能性があるため、同期設定にする
+        #    のは1ノードのみに変更した
+        # https://github.com/t-matsuo/resource-agents/commit/55494b5052f540030938733ec4729cc37ac64a8c#heartbeat/pgsql
+        ocf_log debug "$sync_node_in_conf is already sync mode."
     else
         ocf_log info "Setup $1 into sync mode."
         echo "synchronous_standby_names = '$1'" > "$REP_MODE_CONF"
+        [ "$RE_CONTROL_SLAVE" = "false" ] && RE_CONTROL_SLAVE="true"
+        exec_with_retry 0 reload_conf
     fi
-
-    sync_node_in_conf=`cat $REP_MODE_CONF | cut -d "'" -f 2`
-    ocf_log info "All synced nodes : \"$sync_node_in_conf\""
-    reload_conf
-}
-
-# 指定されたノードが同期設定になっているかを確認するための関数
-is_sync_mode() {
-    cat $REP_MODE_CONF |  grep -q -e "[,' ]$1[,' ]"
 }
 
 # pg_ctl reload で設定をリロードする。同期モード設定変更を反映するために使用される。
@@ -1665,11 +1640,7 @@ change_pgsql_status() {
         fi
 
         ocf_log info "Changing $PGSQL_STATUS_ATTR on $1 : $output->$2."
-        $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -v "$2"
-        if [ $? -ne 0 ]; then
-            ocf_log err "Can't change $PGSQL_STATUS_ATTR."
-            return 1
-        fi
+        exec_with_retry 0 $CRM_ATTR_REBOOT -N "$1" -n "$PGSQL_STATUS_ATTR" -v "$2"
     fi
     return 0
 }
@@ -1694,14 +1665,8 @@ change_data_status() {
             # 電源断などによりDCノードが移動している最中に、forever属性の値を変更しようとすると
             # crm_attribute コマンドは無応答となってしまうため、タイムアウトを設定して実行する。
             # timeout のデフォルト値は5秒。
-            # 応答が返ってこない場合は、whileループにより再度このコマンドが実行される。
-            exec_func_with_timeout "$CRM_ATTR_FOREVER" "-N $1 -n \
-                                    $PGSQL_DATA_STATUS_ATTR -v \"$2\"" \
-                                    $OCF_RESKEY_crm_attr_timeout
-            if [ $? -ne 0 ]; then
-                ocf_log err "Can't change $PGSQL_DATA_STATUS_ATTR."
-                return 1
-            fi
+            # さらに、crm_attributeコマンド実行失敗時はリトライをかける。
+            exec_with_retry 0 exec_with_timeout 0 "$CRM_ATTR_FOREVER" -N $1 -n $PGSQL_DATA_STATUS_ATTR -v "$2"
         else
             break
         fi
@@ -1717,11 +1682,7 @@ set_master_score() {
     current_score=`$CRM_ATTR_REBOOT -N "$1" -n "master-$3" -G -q 2>/dev/null`
     if [ -n "$current_score" -a "$current_score" != "$2" ]; then
         ocf_log info "Changing $3 master score on $1 : $current_score->$2."
-        $CRM_ATTR_REBOOT -N "$target" -n "master-$3" -v "$2"
-        if [ $? -ne 0 ]; then
-            ocf_log err "Can't change master score."
-            return 1
-        fi
+        exec_with_retry 0 $CRM_ATTR_REBOOT -N "$target" -n "master-$3" -v "$2"
     fi
     return 0
 }
@@ -1772,11 +1733,13 @@ report_psql_error()
 {
     local rc
     local loglevel
+    local message
 
     rc=$1
     loglevel=${2:-err}
+    message="$3"
 
-    ocf_log $loglevel "PostgreSQL $OCF_RESKEY_pgdb isn't running"
+    ocf_log $loglevel "$message rc=$rc"
     if [ $rc -eq 1 ]; then
         ocf_log err "Fatal error (out of memory, file not found, etc.) occurred while executing the psql command."
     elif [ $rc -eq 2 ]; then
@@ -1789,43 +1752,81 @@ report_psql_error()
 #
 # タイムアウトを設定して、指定されたコマンドを実行する。
 # DCノード遷移中にcrm_attribute -l forever を使うとコマンドが無応答になるための対策用関数。
-# arg1 : command
-# arg2 : command's args
-# arg3 : timeout(s)
-#
-exec_func_with_timeout() {
+# timeout management function
+# arg1   timeout >= 0 (if arg1 is 0, OCF_RESKEY_crm_attr_timeout is used.)
+# arg2 : command
+# arg3 : command's args
+exec_with_timeout() {
     local func_pid
-    local count
+    local count=$OCF_RESKEY_crm_attr_timeout
     local rc
 
-    $1 `eval echo $2` &
+    if [ "$1" -ne 0 ]; then
+        count=$1
+    fi
+    shift
+
+    $* &
     func_pid=$!
-    count=0
+    sleep .1
+
     while kill -s 0 $func_pid >/dev/null 2>&1; do
         sleep 1
-        count=`expr $count + 1`
-        if [ $count -ge $3 ]; then
-            ocf_log debug "Execute $1 time out."
-
+        count=`expr $count - 1`
+        if [ $count -le 0 ]; then
+            ocf_log err "\"$*\" (pid=$func_pid) timed out."
             # 指定された時間内にコマンドが応答を返さない場合は、プロセスをkillする。
             kill -s 9 $func_pid >/dev/null 2>&1
+            return 1
+        fi
+        ocf_log info "Waiting($count). \"$*\" (pid=$func_pid)."
+    done
+    wait $func_pid
+}
+
+# crm_xxx コマンドの接続数には限界があるため、crm_xxx コマンド失敗した場合に
+# リトライするための関数
+# retry command when command doesn't return 0
+# arg1       : count >= 0 (if arg1 is 0, it retries command in infinitum(1day))
+# arg2..argN : command and args
+exec_with_retry() {
+    local count="86400"
+    local output
+    local rc
+
+    if [ "$1" -ne 0 ]; then
+        count=$1
+    fi
+    shift
+
+    while [ $count -gt 0 ]; do
+        output=`$*`
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            ocf_log warn "Retrying(remain $count). \"$*\" failed. rc=$rc. stdout=\"$output\"."
+            count=`expr $count - 1`
+            sleep 1
+        else
+            printf "${output}"
             return 0
         fi
     done
-    wait $func_pid
+
+    ocf_log err "giving up executing \"$*\""
+    return $rc
 }
 
 # 指定したノードがonlineかどうかを判断するための関数
 is_node_online() {
     # PM1.0とPM1.1でcrm_monの出力が微妙に異なるため、"^node $1 " と "^node $1:" で grepしている
     # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
-    crm_mon -1 -n | tr '[A-Z]' '[a-z]' | grep -e "^node $1 " -e "^node $1:" | grep -q -v "offline"
+    print_crm_mon | tr '[A-Z]' '[a-z]' | grep -e "^node $1 " -e "^node $1:" | grep -q -v "offline"
 }
 
 # 指定したノードが存在するかどうかを判断するための関数 (onlineかどうかは問わない)
 node_exist() {
-    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
-    crm_mon -1 -n | tr '[A-Z]' '[a-z]' | grep -q "^node $1"
+    # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換してからgrepする
+    print_crm_mon | tr '[A-Z]' '[a-z]' | grep -q "^node $1"
 }
 
 check_binary2() {
@@ -2020,6 +2021,13 @@ check_socket_dir() {
     fi
 }
 
+print_crm_mon() {
+    if [ -z "$CRM_MON_OUTPUT" ]; then
+        CRM_MON_OUTPUT=`exec_with_retry 0 crm_mon -n1`
+    fi
+    printf "${CRM_MON_OUTPUT}\n"
+}
+
 #
 #   'main' starts here...
 #
@@ -2073,6 +2081,7 @@ if is_replication; then
 
     # Heartbeatは大文字ホスト名も小文字として処理するため、ノード名は全て小文字に変換する
     NODE_LIST=`echo $OCF_RESKEY_node_list | tr '[A-Z]' '[a-z]'`
+    RE_CONTROL_SLAVE="false"
 fi
 
 case "$1" in

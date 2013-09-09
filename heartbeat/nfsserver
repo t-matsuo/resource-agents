@@ -13,9 +13,14 @@ else
 fi
 
 DEFAULT_INIT_SCRIPT="/etc/init.d/nfsserver"
-DEFAULT_NOTIFY_CMD="/sbin/sm-notify"
+DEFAULT_NOTIFY_CMD=`which sm-notify`
+DEFAULT_NOTIFY_CMD=${DEFAULT_NOTIFY_CMD:-"/sbin/sm-notify"}
 DEFAULT_NOTIFY_FOREGROUND="false"
 DEFAULT_RPCPIPEFS_DIR="/var/lib/nfs/rpc_pipefs"
+EXEC_MODE=0
+SELINUX_ENABLED=-1
+STATD_PATH="/var/lib/nfs"
+STATD_DIR=""
 
 nfsserver_meta_data() {
 	cat <<END
@@ -36,19 +41,24 @@ It depends on Linux specific NFS implementation details, so is considered not po
 <parameter name="nfs_init_script" unique="0" required="0">
 <longdesc lang="en">
 The default init script shipped with the Linux distro.
-The nfsserver resource agent offloads the start/stop/monitor work to the init script because the procedure to start/stop/monitor nfsserver varies on different Linux distro.
+The nfsserver resource agent offloads the start/stop/monitor 
+work to the init script because the procedure to start/stop/monitor 
+nfsserver varies on different Linux distro. In the event that this
+option is not set, this agent will attempt to use an init script at 
+this location, ${DEFAULT_INIT_SCRIPT}, or detect a systemd unit-file 
+to use in the event that no init script is detected.
 </longdesc>
 <shortdesc lang="en">
 Init script for nfsserver
 </shortdesc>
-<content type="string" default="$DEFAULT_INIT_SCRIPT" />
+<content type="string" default="auto detected" />
 </parameter>
 
 <parameter name="nfs_notify_cmd" unique="0" required="0">
 <longdesc lang="en">
-The tool to send out NSM reboot notification, it should be either sm-notify or rpc.statd.
+The tool to send out NSM reboot notification; it should be either sm-notify or rpc.statd.
 Failover of nfsserver can be considered as rebooting to different machines.
-The nfsserver resource agent use this command to notify all clients about the happening of failover.
+The nfsserver resource agent use this command to notify all clients about the occurrence of failover.
 </longdesc>
 <shortdesc lang="en">
 The tool to send out notification.
@@ -73,7 +83,7 @@ If this option is not specified, sm-notify attempts to send notifications for 15
 causes sm-notify to continue sending notifications to unresponsive peers until it is manually killed.
 </longdesc>
 <shortdesc lang="en">
-Specifies the length of sm-notify retry time(minutes).
+Specifies the length of sm-notify retry time (minutes).
 </shortdesc>
 <content type="integer" default="" />
 </parameter>
@@ -101,10 +111,10 @@ IP addresses.
 
 <parameter name="rpcpipefs_dir" unique="0" required="0">
 <longdesc lang="en">
-The mount point for the sunrpc file system. Default is $DEFAULT_RPCPIPEFS_DIR . 
-This script will mount(bind) nfs_shared_infodir on /var/lib/nfs/ (can not be changed),
+The mount point for the sunrpc file system. Default is $DEFAULT_RPCPIPEFS_DIR. 
+This script will mount (bind) nfs_shared_infodir on /var/lib/nfs/ (cannot be changed),
 and this script will mount the sunrpc file system on $DEFAULT_RPCPIPEFS_DIR (default, can be changed by this parameter).
-If you want to move only rpc_pipefs/ (e.g. to keep rpc_pipefs/ local) from default , please set this value.
+If you want to move only rpc_pipefs/ (e.g. to keep rpc_pipefs/ local) from default, please set this value.
 </longdesc>
 <shortdesc lang="en">
 The mount point for the sunrpc file system.
@@ -150,7 +160,6 @@ case $__OCF_ACTION in
 esac
 
 fp="$OCF_RESKEY_nfs_shared_infodir"
-: ${OCF_RESKEY_nfs_init_script="$DEFAULT_INIT_SCRIPT"}
 : ${OCF_RESKEY_nfs_notify_cmd="$DEFAULT_NOTIFY_CMD"}
 : ${OCF_RESKEY_nfs_notify_foreground="$DEFAULT_NOTIFY_FOREGROUND"}
 
@@ -162,10 +171,117 @@ else
 	rpcpipefs_umount_dir=${OCF_RESKEY_rpcpipefs_dir}
 fi
 
+# Use statd folder if it exists
+if [ -d "/var/lib/nfs/statd" ]; then
+	STATD_DIR="statd"
+	STATD_PATH="/var/lib/nfs/statd"
+fi
+
+# SELinux information. We are taking the permissions from
+# the current statd dir and applying it to the HA one that is
+# being mounted in its place.
+which restorecon > /dev/null 2>&1 && selinuxenabled
+SELINUX_ENABLED=$?
+if [ $SELINUX_ENABLED -eq 0 ]; then
+	export SELINUX_LABEL="$(ls -ldZ $STATD_PATH | cut -f4 -d' ')"
+fi
+
+##
+# EXEC_MODE values
+# 1  user init script or default init script
+# 2  systemd
+#
+# On error, this function will terminate the process
+# with error code $OCF_ERR_INSTALLED
+##
+set_exec_mode()
+{
+
+	##
+	# If EXEC_MODE is already set, we don't need to run this function again.
+	## 
+	if [ $EXEC_MODE -ne 0 ]; then
+		return 0;
+	fi
+
+	##
+	# If the user defined an init script, It must exist for us to continue
+	##
+	if [ -n "$OCF_RESKEY_nfs_init_script" ]; then
+		# check_binary will exit the process if init script does not exist
+		check_binary ${OCF_RESKEY_nfs_init_script}
+		EXEC_MODE=1
+		return 0
+	fi
+
+	##
+	# Check to see if the default init script exists, if so we'll use that.
+	##
+	if which $DEFAULT_INIT_SCRIPT > /dev/null 2>&1; then
+		OCF_RESKEY_nfs_init_script=$DEFAULT_INIT_SCRIPT
+		EXEC_MODE=1
+		return 0
+	fi
+
+	##
+	# Last of all, attempt systemd.
+	##
+	if which systemctl > /dev/null 2>&1; then
+		if systemctl list-unit-files | grep nfs-server > /dev/null && systemctl list-unit-files | grep nfs-lock > /dev/null; then
+			EXEC_MODE=2
+			return 0
+		fi
+	fi
+
+	ocf_log err "No init script or systemd unit file detected for nfs server"
+	exit $OCF_ERR_INSTALLED
+}
+
+nfs_systemd_exec()
+{
+	local cmd=$1
+	local server_res
+	local lock_res
+
+	if [ "$cmd" = "stop" ]; then
+		systemctl $cmd nfs-server.service
+		server_res=$?
+		systemctl $cmd nfs-lock.service
+		lock_res=$?
+	else
+		systemctl $cmd nfs-lock.service
+		lock_res=$?
+		systemctl $cmd nfs-server.service
+		server_res=$?
+	fi
+
+	if [ $lock_res -ne $server_res ]; then
+		# If one is running and the other isn't, or for whatever other reason
+		# the return code's aren't the same, this is bad.
+		ocf_log err "Systemd services nfs-lock and nfs-server are not in the same state after attempting $cmd command"
+		return $OCF_ERR_GENERIC
+	fi
+	return $server_res
+}
+
+##
+# wrapper for init script and systemd calls.
+##
+nfs_exec()
+{
+	local cmd=$1
+	set_exec_mode
+
+	case $EXEC_MODE in 
+		1) ${OCF_RESKEY_nfs_init_script} $cmd;;
+		2) nfs_systemd_exec $cmd;;
+	esac
+}
+
 nfsserver_monitor ()
 {
 	fn=`mktemp`
-	${OCF_RESKEY_nfs_init_script} status > $fn 2>&1 
+	nfs_exec status > $fn 2>&1 
 	rc=$?
 	ocf_log debug `cat $fn`
 	rm -f $fn
@@ -184,25 +300,34 @@ prepare_directory ()
 {
 	[ -d "$fp" ] || mkdir -p $fp
 	[ -d "$rpcpipefs_make_dir" ] || mkdir -p $rpcpipefs_make_dir
-	[ -d "$fp/sm" ] || mkdir -p $fp/sm
-	[ -d "$fp/sm.ha" ] || mkdir -p $fp/sm.ha
-	[ -d "$fp/sm.bak" ] || mkdir -p $fp/sm.bak
 	[ -d "$fp/v4recovery" ] || mkdir -p $fp/v4recovery
+
+	[ -d "$fp/$STATD_DIR" ] || mkdir -p "$fp/$STATD_DIR"
+	[ -d "$fp/$STATD_DIR/sm" ] || mkdir -p "$fp/$STATD_DIR/sm"
+	[ -d "$fp/$STATD_DIR/sm.ha" ] || mkdir -p "$fp/$STATD_DIR/sm.ha"
+	[ -d "$fp/$STATD_DIR/sm.bak" ] || mkdir -p "$fp/$STATD_DIR/sm.bak"
+	[ -n "`id -u rpcuser`" -a "`id -g rpcuser`" ] && chown -R rpcuser.rpcuser "$fp/$STATD_DIR"
+
+	[ $SELINUX_ENABLED -eq 0 ] && chcon -R "$SELINUX_LABEL" "$fp"
 }
 
 is_bound ()
 {
-	mount | grep -q "$1 on $2 type none (.*bind)"
-	return $?
+	if mount | grep -q "on $1 type"; then
+		return 0
+	fi
+
+	return 1
 }
 
 bind_tree ()
 {
-	if is_bound $fp /var/lib/nfs; then
+	if is_bound /var/lib/nfs; then
 		ocf_log debug "$fp is already bound to /var/lib/nfs"
 		return 0
 	fi
 	mount --bind $fp /var/lib/nfs
+	[ $SELINUX_ENABLED -eq 0 ] && restorecon /var/lib/nfs
 }
 
 unbind_tree ()
@@ -210,7 +335,7 @@ unbind_tree ()
 	if `mount | grep -q " on $rpcpipefs_umount_dir"`; then
 		umount -t rpc_pipefs $rpcpipefs_umount_dir
 	fi
-	if is_bound $fp /var/lib/nfs; then
+	if is_bound /var/lib/nfs; then
 		umount /var/lib/nfs
 	fi
 }
@@ -225,13 +350,13 @@ nfsserver_start ()
 	prepare_directory
 	bind_tree
 
-	rm -rf /var/lib/nfs/sm.ha/* > /dev/null 2>&1
-	cp -rf /var/lib/nfs/sm /var/lib/nfs/sm.bak /var/lib/nfs/state /var/lib/nfs/sm.ha > /dev/null 2>&1
+	rm -rf $STATD_PATH/sm.ha/* > /dev/null 2>&1
+	cp -rf $STATD_PATH/sm $STATD_PATH/sm.bak /var/lib/nfs/state $STATD_PATH/sm.ha > /dev/null 2>&1
 
 	ocf_log info "Starting NFS server ..."
 
 	fn=`mktemp`
-	${OCF_RESKEY_nfs_init_script} start > $fn 2>&1
+	nfs_exec start > $fn 2>&1
 	rc=$?
 	ocf_log debug `cat $fn`
 	rm -f $fn
@@ -269,12 +394,12 @@ nfsserver_start ()
 
 	esac
 
-	rm -rf /var/lib/nfs/sm.ha.save > /dev/null 2>&1
-	cp -rf /var/lib/nfs/sm.ha /var/lib/nfs/sm.ha.save > /dev/null 2>&1
+	rm -rf $STATD_PATH/sm.ha.save > /dev/null 2>&1
+	cp -rf $STATD_PATH/sm.ha $STATD_PATH/sm.ha.save > /dev/null 2>&1
 	for ip in `echo ${OCF_RESKEY_nfs_ip} | sed 's/,/ /g'`; do
-	  ${OCF_RESKEY_nfs_notify_cmd} $opts $ip -P /var/lib/nfs/sm.ha
-	  rm -rf /var/lib/nfs/sm.ha > /dev/null 2>&1
-	  cp -rf /var/lib/nfs/sm.ha.save /var/lib/nfs/sm.ha > /dev/null 2>&1
+	  ${OCF_RESKEY_nfs_notify_cmd} $opts $ip -P $STATD_PATH/sm.ha
+	  rm -rf $STATD_PATH/sm.ha > /dev/null 2>&1
+	  cp -rf $STATD_PATH/sm.ha.save $STATD_PATH/sm.ha > /dev/null 2>&1
 	done
 
 
@@ -287,7 +412,7 @@ nfsserver_stop ()
 	ocf_log info "Stopping NFS server ..."
 
 	fn=`mktemp`
-	${OCF_RESKEY_nfs_init_script} stop > $fn 2>&1
+	nfs_exec stop > $fn 2>&1
 	rc=$?
 	ocf_log debug `cat $fn`
 	rm -f $fn
@@ -303,7 +428,10 @@ nfsserver_stop ()
 
 nfsserver_validate ()
 {
-	check_binary ${OCF_RESKEY_nfs_init_script}
+	##
+	# set_exec_mode will exit if nfs server is not installed
+	##
+	set_exec_mode
 	check_binary ${OCF_RESKEY_nfs_notify_cmd}
 
 	if [ x = x"${OCF_RESKEY_nfs_ip}" ]; then

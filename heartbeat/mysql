@@ -54,26 +54,36 @@
 
 #######################################################################
 
+# Attempt to detect a default binary
+OCF_RESKEY_binary_default=$(which mysqld_safe 2> /dev/null)
+if [ "$OCF_RESKEY_binary_default" = "" ]; then
+	OCF_RESKEY_binary_default=$(which safe_mysqld 2> /dev/null)
+fi
+
 # Fill in some defaults if no values are specified
 HOSTOS=`uname`
 if [ "X${HOSTOS}" = "XOpenBSD" ];then
-OCF_RESKEY_binary_default="/usr/local/bin/mysqld_safe"
-OCF_RESKEY_config_default="/etc/my.cnf"
-OCF_RESKEY_datadir_default="/var/mysql"
-OCF_RESKEY_user_default="_mysql"
-OCF_RESKEY_group_default="_mysql"
-OCF_RESKEY_log_default="/var/log/mysqld.log"
-OCF_RESKEY_pid_default="/var/mysql/mysqld.pid"
-OCF_RESKEY_socket_default="/var/run/mysql/mysql.sock"
+	if [ "$OCF_RESKEY_binary_default" = "" ]; then
+		OCF_RESKEY_binary_default="/usr/local/bin/mysqld_safe"
+	fi
+	OCF_RESKEY_config_default="/etc/my.cnf"
+	OCF_RESKEY_datadir_default="/var/mysql"
+	OCF_RESKEY_user_default="_mysql"
+	OCF_RESKEY_group_default="_mysql"
+	OCF_RESKEY_log_default="/var/log/mysqld.log"
+	OCF_RESKEY_pid_default="/var/mysql/mysqld.pid"
+	OCF_RESKEY_socket_default="/var/run/mysql/mysql.sock"
 else
-OCF_RESKEY_binary_default="/usr/bin/safe_mysqld"
-OCF_RESKEY_config_default="/etc/my.cnf"
-OCF_RESKEY_datadir_default="/var/lib/mysql"
-OCF_RESKEY_user_default="mysql"
-OCF_RESKEY_group_default="mysql"
-OCF_RESKEY_log_default="/var/log/mysqld.log"
-OCF_RESKEY_pid_default="/var/run/mysql/mysqld.pid"
-OCF_RESKEY_socket_default="/var/lib/mysql/mysql.sock"
+	if [ "$OCF_RESKEY_binary_default" = "" ]; then
+		OCF_RESKEY_binary_default="/usr/bin/safe_mysqld"
+	fi
+	OCF_RESKEY_config_default="/etc/my.cnf"
+	OCF_RESKEY_datadir_default="/var/lib/mysql"
+	OCF_RESKEY_user_default="mysql"
+	OCF_RESKEY_group_default="mysql"
+	OCF_RESKEY_log_default="/var/log/mysqld.log"
+	OCF_RESKEY_pid_default="/var/run/mysql/mysqld.pid"
+	OCF_RESKEY_socket_default="/var/lib/mysql/mysql.sock"
 fi
 OCF_RESKEY_client_binary_default="mysql"
 OCF_RESKEY_test_user_default="root"
@@ -884,6 +894,8 @@ mysql_monitor() {
 }
 
 mysql_start() {
+    local rc pid
+
     if ocf_is_ms; then
         # Initialize the ReaderVIP attribute, monitor will enable it
         set_reader_attr 0
@@ -950,25 +962,25 @@ mysql_start() {
     --pid-file=$OCF_RESKEY_pid \
     --socket=$OCF_RESKEY_socket \
     --datadir=$OCF_RESKEY_datadir \
+    --log-error=$OCF_RESKEY_log \
     --user=$OCF_RESKEY_user $OCF_RESKEY_additional_parameters \
     $mysql_extra_params >/dev/null 2>&1 &
-    rc=$?
-
-    if [ $rc != 0 ]; then
-        ocf_log err "MySQL start command failed: $rc"
-        return $rc
-    fi
+    pid=$!
 
     # Spin waiting for the server to come up.
     # Let the CRM/LRM time us out if required.
     start_wait=1
     while [ $start_wait = 1 ]; do
+        if ! ps $pid > /dev/null 2>&1; then
+            wait $pid
+            ocf_log err "MySQL server failed to start (rc=$?), please check your installation"
+            return $OCF_ERR_GENERIC
+        fi
         mysql_status info
         rc=$?
         if [ $rc = $OCF_SUCCESS ]; then
             start_wait=0
-
-            elif [ $rc != $OCF_NOT_RUNNING ]; then
+        elif [ $rc != $OCF_NOT_RUNNING ]; then
             ocf_log info "MySQL start failed: $rc"
             return $rc
         fi
@@ -1258,3 +1270,5 @@ case "$1" in
  *)     usage
         exit $OCF_ERR_UNIMPLEMENTED;;
 esac
+
+# vi:sw=4:ts=4:et:

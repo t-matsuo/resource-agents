@@ -18,6 +18,7 @@
 #   OCF_RESKEY_socket_path
 #   OCF_RESKEY_config
 #   OCF_RESKEY_name
+#   OCF_RESKEY_maxfiles
 #
 #######################################################################
 # Initialization:
@@ -49,7 +50,7 @@ meta_data() {
 <version>1.0</version>
 
 <longdesc lang="en">
-The Pound Resource Agent can manage pound instances.
+The Pound Resource Agent can manage Pound instances.
 </longdesc>
 <shortdesc lang="en">Manage a Pound instance</shortdesc>
 
@@ -57,7 +58,7 @@ The Pound Resource Agent can manage pound instances.
 
 <parameter name="config" unique="1" required="1">
 <longdesc lang="en">
-The Pound configuration file that pound should manage, for example
+The Pound configuration file that Pound should manage, for example
 "/etc/pound.cfg".
 </longdesc>
 <shortdesc lang="en">Pound configuration file</shortdesc>
@@ -66,7 +67,7 @@ The Pound configuration file that pound should manage, for example
 
 <parameter name="name" unique="1">
 <longdesc lang="en">
-Override the name of the instance that should be given to pound
+Override the name of the instance that should be given to Pound
 (defaults to the resource identifier).
 </longdesc>
 <shortdesc lang="en">Instance name</shortdesc>
@@ -76,9 +77,9 @@ Override the name of the instance that should be given to pound
 <parameter name="pid" unique="1">
 <longdesc lang="en">
 Write the process's PID to the specified file.
-The default will include the specified name, ie.:
-"/var/run/pound_production.pid". Unlike what this help message shows.
-It is most likely not necessary to change this parameter.
+The default will include the specified name, i.e.:
+"/var/run/pound_production.pid". Unlike what this help message shows,
+it is most likely not necessary to change this parameter.
 </longdesc>
 <shortdesc lang="en">Pidfile</shortdesc>
 <content type="string" default="${OCF_RESKEY_pid_default}" />
@@ -86,7 +87,7 @@ It is most likely not necessary to change this parameter.
 
 <parameter name="binary">
 <longdesc lang="en">
-This is used to start pound server.
+This is used to start Pound server.
 Normally use pound.
 </longdesc>
 <shortdesc lang="en"></shortdesc>
@@ -95,7 +96,7 @@ Normally use pound.
 
 <parameter name="ctl_binary">
 <longdesc lang="en">
-This is used to watch pound status via unix socket.
+This is used to watch Pound status via Unix socket.
 Normally use poundctl.
 </longdesc>
 <shortdesc lang="en"></shortdesc>
@@ -104,12 +105,21 @@ Normally use poundctl.
 
 <parameter name="socket_path">
 <longdesc lang="en">
-Write the process's unix socket.
-This parameter is same 'Control' parameter in configuration file, ie.:
-Control "/var/lib/pound/pound.cfg"
+Write the process's Unix socket.
+This parameter is same 'Control' parameter in configuration file, i.e.:
+Control "/var/lib/pound/pound.cfg".
 </longdesc>
 <shortdesc lang="en"></shortdesc>
 <content type="string" default="${OCF_RESKEY_socket_path_default}" />
+</parameter>
+
+<parameter name="maxfiles">
+<longdesc lang="en">
+Determines how many files pound is allowed to open at
+a time. Helps to fix the 'Too many open files' error message.
+</longdesc>
+<shortdesc lang="en">Allowed number of open files.</shortdesc>
+<content type="integer" default="" />
 </parameter>
 
 </parameters>
@@ -191,6 +201,14 @@ pound_start() {
         ocf_log err "Pound configuration file is not valid"
         return $OCF_ERR_CONFIGURED
     fi 
+
+    if [ -n "$OCF_RESKEY_maxfiles" ]; then
+        ulimit -n $OCF_RESKEY_maxfiles
+        u_rc=$?
+        if [ "$u_rc" -ne 0 ]; then
+           ocf_log warn "Could not set ulimit for open files for Pound to '$OCF_RESKEY_maxfiles'"
+        fi
+    fi
 
     ocf_run $OCF_RESKEY_binary \
         -f $OCF_RESKEY_config \

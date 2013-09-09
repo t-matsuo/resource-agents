@@ -32,6 +32,7 @@ ocftcfgs_DATA      =  apache  	\
 		       	 Raid1	\
 			 IPsrcaddr  	\
 			 MailTo		\
+			 jboss	\
 		       	 mysql		\
 		       	 mysql-proxy		\
 		       	 pgsql		\
@@ -43,6 +44,7 @@ ocftcfgs_DATA      =  apache  	\
 		       	 iscsi	\
 		       	 named	\
 		       	 postfix	\
+			 tomcat	\
 		       	 Xinetd	\
 			 SendArp
 
