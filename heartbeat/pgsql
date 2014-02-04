@@ -836,10 +836,6 @@ pgsql_real_monitor() {
         return $OCF_NOT_RUNNING
     fi
 
-    if ocf_is_true ${OCF_RESKEY_check_wal_receiver}; then
-        pgsql_wal_receiver_status
-    fi
-
     if is_replication; then
         #Check replication state
         output=`su $OCF_RESKEY_pgdba -c "cd $OCF_RESKEY_pgdata; \
@@ -859,6 +855,9 @@ pgsql_real_monitor() {
                 ;;
 
             t)  ocf_log debug "PostgreSQL is running as a hot standby."
+                if ocf_is_true ${OCF_RESKEY_check_wal_receiver}; then
+                        pgsql_wal_receiver_status
+                fi
                 return $OCF_SUCCESS;;
 
             *)  ocf_log err "$CHECK_MS_SQL output is $output"
