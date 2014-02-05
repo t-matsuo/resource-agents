@@ -6,6 +6,7 @@
 # Authors:      Serge Dubrouski (sergeyfd@gmail.com) -- original RA
 #               Florian Haas (florian@linbit.com) -- makeover
 #               Takatoshi MATSUO (matsuo.tak@gmail.com) -- support replication
+#		gustavo panizzo (gfa@zumbi.com.ar) -- support for password replication
 #
 # Copyright:    2006-2012 Serge Dubrouski <sergeyfd@gmail.com>
 #                         and other Linux-HA contributors
@@ -56,6 +57,7 @@ OCF_RESKEY_archive_cleanup_command_default=""
 OCF_RESKEY_recovery_end_command_default=""
 OCF_RESKEY_master_ip_default=""
 OCF_RESKEY_repuser_default="postgres"
+OCF_RESKEY_repass_default=""
 OCF_RESKEY_primary_conninfo_opt_default=""
 OCF_RESKEY_restart_on_promote_default="false"
 OCF_RESKEY_tmpdir_default="/var/lib/pgsql/tmp"
@@ -87,6 +89,7 @@ OCF_RESKEY_stop_escalate_in_slave_default=30
 : ${OCF_RESKEY_recovery_end_command=${OCF_RESKEY_recovery_end_command_default}}
 : ${OCF_RESKEY_master_ip=${OCF_RESKEY_master_ip_default}}
 : ${OCF_RESKEY_repuser=${OCF_RESKEY_repuser_default}}
+: ${OCF_RESKEY_repass=${OCF_RESKEY_repass_default}}
 : ${OCF_RESKEY_primary_conninfo_opt=${OCF_RESKEY_primary_conninfo_opt_default}}
 : ${OCF_RESKEY_restart_on_promote=${OCF_RESKEY_restart_on_promote_default}}
 : ${OCF_RESKEY_tmpdir=${OCF_RESKEY_tmpdir_default}}
@@ -325,6 +328,16 @@ This is required for replication.
 </longdesc>
 <shortdesc lang="en">repuser</shortdesc>
 <content type="string" default="${OCF_RESKEY_repuser_default}" />
+</parameter>
+
+<parameter name="repass" unique="0" required="0">
+<longdesc lang="en">
+Password used to connect to the master server.
+This parameter is used for "primary_conninfo" in recovery.conf.
+This is optional for replication.
+</longdesc>
+<shortdesc lang="en">repass</shortdesc>
+<content type="string" default="${OCF_RESKEY_repass_default}" />
 </parameter>
 
 <parameter name="primary_conninfo_opt" unique="0" required="0">
@@ -1342,13 +1355,21 @@ make_recovery_conf() {
         return 1
     fi
 
+if [ $OCF_RESKEY_repass != "" ]; then
+cat > $RECOVERY_CONF <<END
+standby_mode = 'on'
+primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} password=${OCF_RESKEY_repass} application_name=${NODENAME} ${OCF_RESKEY_primary_conninfo_opt}'
+restore_command = '${OCF_RESKEY_restore_command}'
+recovery_target_timeline = 'latest'
+END
+	else
 cat > $RECOVERY_CONF <<END
 standby_mode = 'on'
 primary_conninfo = 'host=${OCF_RESKEY_master_ip} port=${OCF_RESKEY_pgport} user=${OCF_RESKEY_repuser} application_name=${NODENAME} ${OCF_RESKEY_primary_conninfo_opt}'
 restore_command = '${OCF_RESKEY_restore_command}'
 recovery_target_timeline = 'latest'
 END
-
+fi
     user_recovery_conf >> $RECOVERY_CONF
     ocf_log debug "Created recovery.conf. host=${OCF_RESKEY_master_ip}, user=${OCF_RESKEY_repuser}"
     return 0
